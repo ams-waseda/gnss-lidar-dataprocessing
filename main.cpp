@@ -1,6 +1,6 @@
-#include "hesai_lidar_sdk.hpp"
+#include "./lib/HesaiLidar_SDK_2.0/driver/hesai_lidar_sdk.hpp"
 
-#include "source_driver_ros1.hpp"
+#include "./lib/HesaiLidar_ROS_2.0/source_driver_ros1.hpp"
 
 #include <string>
 
@@ -34,11 +34,11 @@ bool IsPlayEnded(HesaiLidarSdk<LidarPointXYZICRT>& sdk)
 
 int main(int argc, char *argv[])
 {
-#ifndef _MSC_VER
-  if (system("sudo sh -c \"echo 562144000 > /proc/sys/net/core/rmem_max\"") == -1) {
-    printf("Command execution failed!\n");
-  }
-#endif
+//#ifndef _MSC_VER
+//  if (system("sudo sh -c \"echo 562144000 > /proc/sys/net/core/rmem_max\"") == -1) {
+//    printf("Command execution failed!\n");
+//  }
+//#endif
   HesaiLidarSdk<LidarPointXYZICRT> sample;
   DriverParam param;
 
