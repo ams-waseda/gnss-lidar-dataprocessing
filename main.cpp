@@ -1,6 +1,6 @@
 //#include "./lib/HesaiLidar_SDK_2.0/driver/hesai_lidar_sdk.hpp"
 #include "lib/HesaiLidar_ROS_2.0/src/manager/source_driver_ros1.hpp"
-
+#include <rosbag/bag.h>
 #include <string>
 
 uint32_t last_frame_time = 0;
@@ -17,6 +17,9 @@ void lidarCallback(const LidarDecodedFrame<LidarPointXYZICRT>  &frame) {
   //printf("frame:%d points:%u packet:%u start time:%lf end time:%lf\n",frame.frame_index, frame.points_num, frame.packet_num, frame.points[0].timestamp, frame.points[frame.points_num - 1].timestamp) ;
   std::string frame_id = std::to_string(cur_frame_time);
   sensor_msgs::PointCloud2 outputRosmsg = ToRosMsg(frame, frame_id);
+
+  rosbag::Bag bag("outputs/pointcloud.bag", rosbag::bagmode::Write);
+  bag.write("/pointcloud", cur_frame_time, outputRosmsg)
 }
 
 void faultMessageCallback(const FaultMessageInfo& fault_message_info) {
