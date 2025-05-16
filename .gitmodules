@@ -1,6 +1,3 @@
-[submodule "lib/HesaiLidar_SDK_2.0"]
-	path = lib/HesaiLidar_SDK_2.0
-	url = https://github.com/HesaiTechnology/HesaiLidar_SDK_2.0.git
 [submodule "lib/HesaiLidar_ROS_2.0"]
 	path = lib/HesaiLidar_ROS_2.0
 	url = https://github.com/HesaiTechnology/HesaiLidar_ROS_2.0.git
