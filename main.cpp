@@ -1,6 +1,5 @@
-#include "./lib/HesaiLidar_SDK_2.0/driver/hesai_lidar_sdk.hpp"
-
-#include "./lib/HesaiLidar_ROS_2.0/source_driver_ros1.hpp"
+//#include "./lib/HesaiLidar_SDK_2.0/driver/hesai_lidar_sdk.hpp"
+#include "lib/HesaiLidar_ROS_2.0/src/manager/source_driver_ros1.hpp"
 
 #include <string>
 
@@ -17,7 +16,7 @@ void lidarCallback(const LidarDecodedFrame<LidarPointXYZICRT>  &frame) {
   last_frame_time = cur_frame_time;
   //printf("frame:%d points:%u packet:%u start time:%lf end time:%lf\n",frame.frame_index, frame.points_num, frame.packet_num, frame.points[0].timestamp, frame.points[frame.points_num - 1].timestamp) ;
   std::string frame_id = std::to_string(cur_frame_time);
-  sensor_msgs::PointCloud2 ToRosMsg(frame, frame_id);
+  sensor_msgs::PointCloud2 outputRosmsg = ToRosMsg(frame, frame_id);
 }
 
 void faultMessageCallback(const FaultMessageInfo& fault_message_info) {
@@ -44,18 +43,18 @@ int main(int argc, char *argv[])
 
   // assign param
   // param.decoder_param.enable_packet_loss_tool = true;
-  param.lidar_type = "XT32";
+  param.lidar_type = "XT32M2X";
   param.input_param.source_type = DATA_FROM_LIDAR;
   param.input_param.pcap_path = "./inputs/hesai.pcap";
-  // param.input_param.correction_file_path = "Your correction file path";
-  // param.input_param.firetimes_path = "Your firetime file path";
+  param.input_param.correction_file_path = "./lib/HesaiLidar_SDK_2.0/correction/angle_correction/XT32M2X_Angle Correction File.csv";
+  param.input_param.firetimes_path = "./lib/HesaiLidar_SDK_2.0/correction/firetime_correction/PandarXT-32M2X_Firetime Correction File.csv";
 
-  param.input_param.device_ip_address = "192.168.1.201";
+  //param.input_param.device_ip_address = "192.168.1.201";
   param.input_param.ptc_port = 9347;
   param.input_param.udp_port = 2368;
   // param.input_param.rs485_com = "Your serial port name for receiving point cloud";
   // param.input_param.rs232_com = "Your serial port name for sending cmd";
-  param.input_param.host_ip_address = "192.168.1.200";
+  //param.input_param.host_ip_address = "192.168.1.200";
   // param.input_param.multicast_ip_address = "";
   param.decoder_param.distance_correction_lidar_flag = false;
   param.decoder_param.socket_buffer_size = 262144000;
