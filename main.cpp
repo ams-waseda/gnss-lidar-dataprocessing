@@ -1,6 +1,7 @@
-#include "lib/HesaiLidar_ROS_2.0/src/manager/source_driver_ros1.hpp"
-#include <rosbag/bag.h>
-#include <string>
+#include <hesai_lidar_sdk.hpp>
+#include <rclcpp/rclcpp.hpp>
+#include <rosbag2_cpp/writer.hpp>
+#include <std_msgs>
 
 uint32_t last_frame_time = 0;
 uint32_t cur_frame_time = 0;
@@ -14,12 +15,65 @@ void lidarCallback(const LidarDecodedFrame<LidarPointXYZICRT>  &frame) {
   }
   last_frame_time = cur_frame_time;
   //printf("frame:%d points:%u packet:%u start time:%lf end time:%lf\n",frame.frame_index, frame.points_num, frame.packet_num, frame.points[0].timestamp, frame.points[frame.points_num - 1].timestamp) ;
-  std::string frame_id = std::to_string(cur_frame_time);
-  sensor_msgs::PointCloud2 outputRosmsg = ToRosMsg(frame, frame_id);
 
-  rosbag::Bag bag("outputs/pointcloud.bag", rosbag::bagmode::Write);
-  bag.write("/pointcloud", cur_frame_time, outputRosmsg);
-  bag.close();
+  sensor_msgs::msg::PointCloud2 ros_msg;
+
+  int fields = 6;
+  ros_msg.fields.clear();
+  ros_msg.fields.reserve(fields);
+  ros_msg.width = frame.points_num; 
+  ros_msg.height = 1; 
+
+  int offset = 0;
+  offset = addPointField(ros_msg, "x", 1, sensor_msgs::msg::PointField::FLOAT32, offset);
+  offset = addPointField(ros_msg, "y", 1, sensor_msgs::msg::PointField::FLOAT32, offset);
+  offset = addPointField(ros_msg, "z", 1, sensor_msgs::msg::PointField::FLOAT32, offset);
+  offset = addPointField(ros_msg, "intensity", 1, sensor_msgs::msg::PointField::FLOAT32, offset);
+  offset = addPointField(ros_msg, "ring", 1, sensor_msgs::msg::PointField::UINT16, offset);
+  offset = addPointField(ros_msg, "timestamp", 1, sensor_msgs::msg::PointField::FLOAT64, offset);
+
+  ros_msg.point_step = offset;
+  ros_msg.row_step = ros_msg.width * ros_msg.point_step;
+  ros_msg.is_dense = false;
+  ros_msg.data.resize(frame.points_num * ros_msg.point_step);
+
+  sensor_msgs::PointCloud2Iterator<float> iter_x_(ros_msg, "x");
+  sensor_msgs::PointCloud2Iterator<float> iter_y_(ros_msg, "y");
+  sensor_msgs::PointCloud2Iterator<float> iter_z_(ros_msg, "z");
+  sensor_msgs::PointCloud2Iterator<float> iter_intensity_(ros_msg, "intensity");
+  sensor_msgs::PointCloud2Iterator<uint16_t> iter_ring_(ros_msg, "ring");
+  sensor_msgs::PointCloud2Iterator<double> iter_timestamp_(ros_msg, "timestamp");
+  for (size_t i = 0; i < frame.points_num; i++)
+  {
+    LidarPointXYZIRT point = frame.points[i];
+    *iter_x_ = point.x;
+    *iter_y_ = point.y;
+    *iter_z_ = point.z;
+    *iter_intensity_ = point.intensity;
+    *iter_ring_ = point.ring;
+    *iter_timestamp_ = point.timestamp;
+    ++iter_x_;
+    ++iter_y_;
+    ++iter_z_;
+    ++iter_intensity_;
+    ++iter_ring_;
+    ++iter_timestamp_;   
+  }
+  // printf("HesaiLidar Runing Status [standby mode:%u]  |  [speed:%u]\n", frame.work_mode, frame.spin_speed);
+  printf("frame:%d points:%u packet:%d start time:%lf end time:%lf\n",frame.frame_index, frame.points_num, frame.packet_num, frame.points[0].timestamp, frame.points[frame.points_num - 1].timestamp) ;
+  std::cout.flush();
+  auto sec = (uint64_t)floor(frame.points[0].timestamp);
+  if (sec <= std::numeric_limits<int32_t>::max()) {
+    ros_msg.header.stamp.sec = (uint32_t)floor(frame.points[0].timestamp);
+    ros_msg.header.stamp.nanosec = (uint32_t)round((frame.points[0].timestamp - ros_msg.header.stamp.sec) * 1e9);
+  } else {
+    printf("does not support timestamps greater than 19 January 2038 03:14:07 (now %lf)\n", frame.points[0].timestamp);
+  }
+  ros_msg.header.frame_id = frame_id_;
+
+  rosbag2_cpp::Writer writer;
+  writer.open("/outputs/pointcloud");
+  writer.write(bag_message);
 }
 
 void faultMessageCallback(const FaultMessageInfo& fault_message_info) {
@@ -37,7 +91,7 @@ bool IsPlayEnded(HesaiLidarSdk<LidarPointXYZICRT>& sdk)
 int main(int argc, char *argv[])
 {
 //#ifndef _MSC_VER
-//  if (system("sudo sh -c \"echo 562144000 > /proc/sys/net/core/rmem_max\"") == -1) {
+//if (system("sudo sh -c \"echo 562144000 > /proc/sys/net/core/rmem_max\"") == -1) {
 //    printf("Command execution failed!\n");
 //  }
 //#endif
@@ -48,9 +102,9 @@ int main(int argc, char *argv[])
   // param.decoder_param.enable_packet_loss_tool = true;
   param.lidar_type = "XT32M2X";
   param.input_param.source_type = DATA_FROM_LIDAR;
-  param.input_param.pcap_path = "./inputs/hesai.pcap";
-  param.input_param.correction_file_path = "./lib/HesaiLidar_SDK_2.0/correction/angle_correction/XT32M2X_Angle Correction File.csv";
-  param.input_param.firetimes_path = "./lib/HesaiLidar_SDK_2.0/correction/firetime_correction/PandarXT-32M2X_Firetime Correction File.csv";
+  param.input_param.pcap_path = "/inputs/hesai.pcap";
+  param.input_param.correction_file_path = "/lib/HesaiLidar_SDK_2.0/correction/angle_correction/XT32M2X_Angle Correction File.csv";
+  param.input_param.firetimes_path = "/lib/HesaiLidar_SDK_2.0/correction/firetime_correction/PandarXT-32M2X_Firetime Correction File.csv";
 
   //param.input_param.device_ip_address = "192.168.1.201";
   param.input_param.ptc_port = 9347;
