@@ -2,8 +2,10 @@ clear;
 close all;
 clc;
 
+dirname = "20250710_142307_APX";
+
 %% Read IMU data
-imu = readmatrix("./inputs/asterx.sbf_SBF_ExtSensorMeas1.txt");
+imu = readmatrix("./inputs/"+dirname+"/asterx.sbf_SBF_ExtSensorMeas1.txt");
 
 % Accelaration (m/s^2)
 idxacc = imu(:,6)==0;
@@ -38,7 +40,7 @@ ylabel("deg/s");
 legend("x","y","z");
 
 %% Convert to ROS bag
-bagWriter = ros2bagwriter("outputs/imu");
+bagWriter = ros2bagwriter("outputs/"+dirname+"/imu");
 for i=1:1:length(unix_time)
     message2 = ros2message("sensor_msgs/Imu");
 

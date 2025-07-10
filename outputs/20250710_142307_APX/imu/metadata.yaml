@@ -1,0 +1,30 @@
+rosbag2_bagfile_information:
+  version: 9
+  storage_identifier: sqlite3
+  duration:
+    nanoseconds: 122900000096
+  starting_time:
+    nanoseconds_since_epoch: 1752125005194999933
+  message_count: 24581
+  topics_with_message_count:
+    - topic_metadata:
+        name: /imu
+        type: sensor_msgs/msg/Imu
+        serialization_format: cdr
+        offered_qos_profiles:
+          []
+        type_description_hash: ""
+      message_count: 24581
+  compression_format: ""
+  compression_mode: ""
+  relative_file_paths:
+    - imu_0.db3
+  files:
+    - path: imu_0.db3
+      starting_time:
+        nanoseconds_since_epoch: 1752125005194999933
+      duration:
+        nanoseconds: 122900000096
+      message_count: 24581
+  custom_data: ~
+  ros_distro: ""
