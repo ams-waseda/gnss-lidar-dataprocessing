@@ -18,7 +18,8 @@ tgyro = gt.Gtime(imu(idxgyro,1)/1000,imu(idxgyro,2));
 gyro = imu(idxgyro,16:18);
 
 % Unix time
-unix_time = posixtime(tacc.t);
+toUTCT = 18; % GPST-UTCT=18s
+unix_time = posixtime(tacc.t-seconds(toUTCT)); % tacc/tgyro is GPS Time, so it is converted to UTC Time
 
 %% Plot and Check
 % Check for missing data
@@ -47,7 +48,7 @@ for i=1:1:length(unix_time)
     % Header/Stamp
     message2.header.stamp.sec = int32(unix_time(i));
     message2.header.stamp.nanosec = uint32((unix_time(i)-fix(unix_time(i)))*10^9);
-    
+
     % Angular rate
     message2.angular_velocity.x = deg2rad(gyro(i,1)); % rad/s
     message2.angular_velocity.y = deg2rad(gyro(i,2));

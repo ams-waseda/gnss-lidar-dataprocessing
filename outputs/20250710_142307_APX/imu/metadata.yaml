@@ -4,7 +4,7 @@ rosbag2_bagfile_information:
   duration:
     nanoseconds: 122900000096
   starting_time:
-    nanoseconds_since_epoch: 1752125005194999933
+    nanoseconds_since_epoch: 1752124987194999933
   message_count: 24581
   topics_with_message_count:
     - topic_metadata:
@@ -22,7 +22,7 @@ rosbag2_bagfile_information:
   files:
     - path: imu_0.db3
       starting_time:
-        nanoseconds_since_epoch: 1752125005194999933
+        nanoseconds_since_epoch: 1752124987194999933
       duration:
         nanoseconds: 122900000096
       message_count: 24581
