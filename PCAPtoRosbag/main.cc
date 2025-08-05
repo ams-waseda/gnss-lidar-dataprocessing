@@ -43,7 +43,9 @@ void lidarCallback(const LidarDecodedFrame<LidarPointXYZICRTT>  &frame) {
     printf("Time between last frame and cur frame is: %u us\n", (cur_frame_time - last_frame_time));
   }
   last_frame_time = cur_frame_time;
-  printf("frame:%d points:%u packet:%u start time:%lf end time:%lf\n",frame.frame_index, frame.points_num, frame.packet_num, frame.points[0].timeSecond, frame.points[frame.points_num - 1].timeSecond) ;
+  double first_time = (double)frame.points[0].timeSecond + (double)(frame.points[0].timeNanosecond)/1e9;
+  double last_time = (double)frame.points[frame.points_num - 1].timeSecond + (double)(frame.points[frame.points_num - 1].timeNanosecond)/1e9;
+  printf("frame:%d points:%u packet:%u start time:%lf end time:%lf\n",frame.frame_index, frame.points_num, frame.packet_num, first_time, last_time) ;
 
   //conversion here
   sensor_msgs::msg::PointCloud2 ros_msg;
@@ -92,12 +94,12 @@ void lidarCallback(const LidarDecodedFrame<LidarPointXYZICRTT>  &frame) {
   }
   
   std::cout.flush();
-  auto sec = (uint64_t)floor(frame.points[0].timeSecond);
-  if (sec <= std::numeric_limits<int32_t>::max()) {
-    ros_msg.header.stamp.sec = (uint32_t)floor(frame.points[0].timeSecond);
-    ros_msg.header.stamp.nanosec = (uint32_t)round(frame.points[0].timeNanosecond);
+  uint64_t lastsec = frame.points[0].timeSecond;
+  if (lastsec <= std::numeric_limits<int32_t>::max()) {
+    ros_msg.header.stamp.sec = (uint32_t)frame.points[0].timeSecond;
+    ros_msg.header.stamp.nanosec = frame.points[0].timeNanosecond;
   } else {
-    printf("does not support timestamps greater than 19 January 2038 03:14:07 (now %lf)\n", frame.points[0].timeSecond);
+    printf("does not support timestamps greater than 19 January 2038 03:14:07 (now %lf)\n", first_time);
   }
   ros_msg.header.frame_id = frame_id;
 
@@ -110,7 +112,8 @@ void lidarCallback(const LidarDecodedFrame<LidarPointXYZICRTT>  &frame) {
   // Serialize the PointCloud2 message into the serialized_msg
   serializer.serialize_message(&ros_msg, &serialized_msg);
 
-  writer.write(serialized_msg, "/lidar_points", "sensor_msgs/msg/PointCloud2", ros_msg.header.stamp);
+  auto msg_ptr = std::make_shared<rclcpp::SerializedMessage>(serialized_msg);
+  writer.write(msg_ptr, "/lidar_points", "sensor_msgs/msg/PointCloud2", ros_msg.header.stamp);
 }
 
 void faultMessageCallback(const FaultMessageInfo& fault_message_info) {
@@ -175,7 +178,7 @@ int main(int argc, char *argv[])
   // You can select the parameters in while():
   // 1.[IsPlayEnded(sample)]: adds the ability for the PCAP to automatically quit after playing the program
   // 2.[1                  ]: the application will not quit voluntarily
-  while (!endflag && (!IsPlayEnded(sample) || GetMicroTickCount() - last_frame_time < 1000000))
+  while (!endflag && (!IsPlayEnded(sample) || GetMicroTickCount() - last_frame_time < 10*1e3))
   {
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
