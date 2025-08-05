@@ -31,20 +31,20 @@
 
 uint32_t last_frame_time = 0;
 uint32_t cur_frame_time = 0;
-std::string frame_id = "hesai_lidar";
+std::string frame_id = "lidar";
 rosbag2_cpp::Writer writer;
 bool endflag = false;
 
 //log info, display frame message
-void lidarCallback(const LidarDecodedFrame<LidarPointXYZICRTT>  &frame) {  
+void lidarCallback(const LidarDecodedFrame<LidarPointXYZIRT>  &frame) {
   cur_frame_time = GetMicroTickCount();
   if (last_frame_time == 0) last_frame_time = GetMicroTickCount();
   if (cur_frame_time - last_frame_time > kMaxTimeInterval) {
     printf("Time between last frame and cur frame is: %u us\n", (cur_frame_time - last_frame_time));
   }
   last_frame_time = cur_frame_time;
-  double first_time = (double)frame.points[0].timeSecond + (double)(frame.points[0].timeNanosecond)/1e9;
-  double last_time = (double)frame.points[frame.points_num - 1].timeSecond + (double)(frame.points[frame.points_num - 1].timeNanosecond)/1e9;
+  double first_time = frame.points[0].timestamp;
+  double last_time = frame.points[frame.points_num - 1].timestamp;
   printf("frame:%d points:%u packet:%u start time:%lf end time:%lf\n",frame.frame_index, frame.points_num, frame.packet_num, first_time, last_time) ;
 
   //conversion here
@@ -60,7 +60,7 @@ void lidarCallback(const LidarDecodedFrame<LidarPointXYZICRTT>  &frame) {
   offset = addPointField(ros_msg, "x", 1, sensor_msgs::msg::PointField::FLOAT32, offset);
   offset = addPointField(ros_msg, "y", 1, sensor_msgs::msg::PointField::FLOAT32, offset);
   offset = addPointField(ros_msg, "z", 1, sensor_msgs::msg::PointField::FLOAT32, offset);
-  offset = addPointField(ros_msg, "intensity", 1, sensor_msgs::msg::PointField::FLOAT32, offset);
+  offset = addPointField(ros_msg, "intensity", 1, sensor_msgs::msg::PointField::UINT8, offset);
   offset = addPointField(ros_msg, "ring", 1, sensor_msgs::msg::PointField::UINT16, offset);
   offset = addPointField(ros_msg, "timestamp", 1, sensor_msgs::msg::PointField::FLOAT64, offset);
 
@@ -68,40 +68,35 @@ void lidarCallback(const LidarDecodedFrame<LidarPointXYZICRTT>  &frame) {
   ros_msg.row_step = ros_msg.width * ros_msg.point_step;
   ros_msg.is_dense = false;
   ros_msg.data.resize(frame.points_num * ros_msg.point_step);
+
+  // header
+  ros_msg.header.frame_id = frame_id;
+  ros_msg.header.stamp.sec = (int32_t)floor(frame.points[0].timestamp);
+  ros_msg.header.stamp.nanosec = (uint32_t)round((frame.points[0].timestamp - floor(frame.points[0].timestamp)) * 1e9);
   
   sensor_msgs::PointCloud2Iterator<float> iter_x_(ros_msg, "x");
   sensor_msgs::PointCloud2Iterator<float> iter_y_(ros_msg, "y");
   sensor_msgs::PointCloud2Iterator<float> iter_z_(ros_msg, "z");
-  sensor_msgs::PointCloud2Iterator<float> iter_intensity_(ros_msg, "intensity");
+  sensor_msgs::PointCloud2Iterator<uint8_t> iter_intensity_(ros_msg, "intensity");
   sensor_msgs::PointCloud2Iterator<uint16_t> iter_ring_(ros_msg, "ring");
   sensor_msgs::PointCloud2Iterator<double> iter_timestamp_(ros_msg, "timestamp");
 
   for (size_t i = 0; i < frame.points_num; i++)
   {
-    LidarPointXYZICRTT point = frame.points[i];
+    LidarPointXYZIRT point = frame.points[i];
     *iter_x_ = point.x;
     *iter_y_ = point.y;
     *iter_z_ = point.z;
     *iter_intensity_ = point.intensity;
     *iter_ring_ = point.ring;
-    *iter_timestamp_ = point.timeSecond;
+    *iter_timestamp_ = point.timestamp;
     ++iter_x_;
     ++iter_y_;
     ++iter_z_;
     ++iter_intensity_;
     ++iter_ring_;
-    ++iter_timestamp_;   
+    ++iter_timestamp_;
   }
-  
-  std::cout.flush();
-  uint64_t lastsec = frame.points[0].timeSecond;
-  if (lastsec <= std::numeric_limits<int32_t>::max()) {
-    ros_msg.header.stamp.sec = (uint32_t)frame.points[0].timeSecond;
-    ros_msg.header.stamp.nanosec = frame.points[0].timeNanosecond;
-  } else {
-    printf("does not support timestamps greater than 19 January 2038 03:14:07 (now %lf)\n", first_time);
-  }
-  ros_msg.header.frame_id = frame_id;
 
   // Create a serialization object for PointCloud2 type
   rclcpp::Serialization<sensor_msgs::msg::PointCloud2> serializer;
@@ -113,7 +108,7 @@ void lidarCallback(const LidarDecodedFrame<LidarPointXYZICRTT>  &frame) {
   serializer.serialize_message(&ros_msg, &serialized_msg);
 
   auto msg_ptr = std::make_shared<rclcpp::SerializedMessage>(serialized_msg);
-  writer.write(msg_ptr, "/lidar_points", "sensor_msgs/msg/PointCloud2", ros_msg.header.stamp);
+  writer.write(msg_ptr, "/lidar/points", "sensor_msgs/msg/PointCloud2", ros_msg.header.stamp);
 }
 
 void faultMessageCallback(const FaultMessageInfo& fault_message_info) {
@@ -123,7 +118,7 @@ void faultMessageCallback(const FaultMessageInfo& fault_message_info) {
 }
 
 // Determines whether the PCAP is finished playing
-bool IsPlayEnded(HesaiLidarSdk<LidarPointXYZICRTT>& sdk)
+bool IsPlayEnded(HesaiLidarSdk<LidarPointXYZIRT>& sdk)
 {
   return sdk.lidar_ptr_->IsPlayEnded();
 }
@@ -135,9 +130,13 @@ void signalHandler(int signum) {
 
 int main(int argc, char *argv[])
 {
+  if (argc == 1) {
+    std::cout << "Enter a pcap file as an argument, e.g. PCAPtoBag ./hesai_lidar.pcap" << std::endl;
+    return -1;
+  }
   rclcpp::init(argc, argv);
 
-  HesaiLidarSdk<LidarPointXYZICRTT> sample;
+  HesaiLidarSdk<LidarPointXYZIRT> sample;
   DriverParam param;
   param.input_param.source_type = DATA_FROM_PCAP;
 
