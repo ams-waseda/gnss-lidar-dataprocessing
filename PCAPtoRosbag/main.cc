@@ -147,7 +147,12 @@ int main(int argc, char *argv[])
   std::string output_path = std::regex_replace(argv[1], std::regex("inputs"), "outputs");
   output_path = std::regex_replace(output_path, std::regex("hesai_lidar.pcap"), "lidar");
   
-  writer.open(output_path);
+  // rosbag options
+  rosbag2_storage::StorageOptions storage_options;
+  storage_options.uri = output_path;
+  storage_options.storage_id = "mcap";
+  rosbag2_cpp::ConverterOptions converter_options;
+  writer.open(storage_options, converter_options);
   
   // input/correction/firetime paths
   std::string correction_path = std::regex_replace(argv[1], std::regex("inputs.*"), "PCAPtoRosbag/correction/angle_correction/XT32M2X_Angle Correction File.csv");
