@@ -30,3 +30,9 @@
 *.exe
 *.out
 *.app
+
+# Inputs/Outputs
+/inputs/*
+!/inputs/input_files_here.txt
+/outputs/*
+!/outputs/output_files_here.txt
