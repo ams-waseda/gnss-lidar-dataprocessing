@@ -1,3 +1,3 @@
-REQUIREMENTS:
+HOW TO INSTALL PCAP CONVERSION
 
-Hesai Lidar ROS 2.0
+The zip file "ros2_ws" is a ros2 workspace. Just use colcon build in the workspace and the executable will be under the build folder.
