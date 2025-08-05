@@ -41,7 +41,7 @@ ylabel("deg/s");
 legend("x","y","z");
 
 %% Convert to ROS bag
-bagWriter = ros2bagwriter("../outputs/"+dirname+"/imu");
+bagWriter = ros2bagwriter("../outputs/"+dirname+"/imu","StorageFormat","mcap");
 for i=1:1:length(unix_time)
     message2 = ros2message("sensor_msgs/Imu");
 
