@@ -150,6 +150,7 @@ int main(int argc, char *argv[])
   
   // other parameters
   param.decoder_param.distance_correction_flag = false;
+  param.decoder_param.pcap_play_synchronization = false; // for speed up
   
   // init lidar with param
   sample.Init(param);
