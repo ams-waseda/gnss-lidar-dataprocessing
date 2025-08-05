@@ -26,12 +26,14 @@
 #include <string>
 #include <functional>
 #include <regex>
+#include <csignal>
 #include <boost/thread.hpp>
 
 uint32_t last_frame_time = 0;
 uint32_t cur_frame_time = 0;
 uint32_t frame_id = 0;
 rosbag2_cpp::Writer writer;
+bool endflag = false;
 
 //log info, display frame message
 void lidarCallback(const LidarDecodedFrame<LidarPointXYZICRTT>  &frame) {  
@@ -128,6 +130,11 @@ bool IsPlayEnded(HesaiLidarSdk<LidarPointXYZICRTT>& sdk)
   return sdk.lidar_ptr_->IsPlayEnded();
 }
 
+// Signal handler
+void signalHandler(int signum) {
+    endflag = true;
+}
+
 int main(int argc, char *argv[])
 {
   rclcpp::init(argc, argv);
@@ -138,7 +145,8 @@ int main(int argc, char *argv[])
 
   // output path
   std::string output_path = std::regex_replace(argv[1], std::regex("inputs"), "outputs");
-  output_path = std::regex_replace(output_path, std::regex(".pcap"), "");
+  output_path = std::regex_replace(output_path, std::regex("hesai_lidar.pcap"), "lidar");
+  
   writer.open(output_path);
   
   // input/correction/firetime paths
@@ -151,7 +159,7 @@ int main(int argc, char *argv[])
   // other parameters
   param.decoder_param.distance_correction_flag = false;
   param.decoder_param.pcap_play_synchronization = false; // for speed up
-  
+
   // init lidar with param
   sample.Init(param);
 
@@ -159,12 +167,15 @@ int main(int argc, char *argv[])
   sample.RegRecvCallback(lidarCallback);
   sample.RegRecvCallback(faultMessageCallback);
 
+  // signal handler
+  signal(SIGINT, signalHandler);
+
   sample.Start();
 
   // You can select the parameters in while():
   // 1.[IsPlayEnded(sample)]: adds the ability for the PCAP to automatically quit after playing the program
   // 2.[1                  ]: the application will not quit voluntarily
-  while (!IsPlayEnded(sample) || GetMicroTickCount() - last_frame_time < 1000000)
+  while (!endflag && (!IsPlayEnded(sample) || GetMicroTickCount() - last_frame_time < 1000000))
   {
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
