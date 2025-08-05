@@ -31,7 +31,7 @@
 
 uint32_t last_frame_time = 0;
 uint32_t cur_frame_time = 0;
-uint32_t frame_id = 0;
+std::string frame_id = "hesai_lidar";
 rosbag2_cpp::Writer writer;
 bool endflag = false;
 
@@ -44,9 +44,6 @@ void lidarCallback(const LidarDecodedFrame<LidarPointXYZICRTT>  &frame) {
   }
   last_frame_time = cur_frame_time;
   printf("frame:%d points:%u packet:%u start time:%lf end time:%lf\n",frame.frame_index, frame.points_num, frame.packet_num, frame.points[0].timeSecond, frame.points[frame.points_num - 1].timeSecond) ;
-  
-
-  std::string framestring = std::to_string(frame_id);
 
   //conversion here
   sensor_msgs::msg::PointCloud2 ros_msg;
@@ -102,9 +99,7 @@ void lidarCallback(const LidarDecodedFrame<LidarPointXYZICRTT>  &frame) {
   } else {
     printf("does not support timestamps greater than 19 January 2038 03:14:07 (now %lf)\n", frame.points[0].timeSecond);
   }
-  ros_msg.header.frame_id = framestring;
-
-  ++frame_id;
+  ros_msg.header.frame_id = frame_id;
 
   // Create a serialization object for PointCloud2 type
   rclcpp::Serialization<sensor_msgs::msg::PointCloud2> serializer;
@@ -115,7 +110,7 @@ void lidarCallback(const LidarDecodedFrame<LidarPointXYZICRTT>  &frame) {
   // Serialize the PointCloud2 message into the serialized_msg
   serializer.serialize_message(&ros_msg, &serialized_msg);
 
-  writer.write(serialized_msg, "/point_cloud", "sensor_msgs/msg/PointCloud2", ros_msg.header.stamp);
+  writer.write(serialized_msg, "/lidar_points", "sensor_msgs/msg/PointCloud2", ros_msg.header.stamp);
 }
 
 void faultMessageCallback(const FaultMessageInfo& fault_message_info) {
