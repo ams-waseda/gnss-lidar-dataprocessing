@@ -25,6 +25,7 @@
 #include <chrono>
 #include <string>
 #include <functional>
+#include <regex>
 #include <boost/thread.hpp>
 
 uint32_t last_frame_time = 0;
@@ -90,8 +91,7 @@ void lidarCallback(const LidarDecodedFrame<LidarPointXYZICRTT>  &frame) {
     ++iter_ring_;
     ++iter_timestamp_;   
   }
-  // printf("HesaiLidar Runing Status [standby mode:%u]  |  [speed:%u]\n", frame.work_mode, frame.spin_speed);
-  // printf("frame:%d points:%u packet:%d start time:%lf end time:%lf\n",frame.frame_index, frame.points_num, frame.packet_num, frame.points[0].timestamp, frame.points[frame.points_num - 1].timestamp) ;
+  
   std::cout.flush();
   auto sec = (uint64_t)floor(frame.points[0].timeSecond);
   if (sec <= std::numeric_limits<int32_t>::max()) {
@@ -118,7 +118,7 @@ void lidarCallback(const LidarDecodedFrame<LidarPointXYZICRTT>  &frame) {
 
 void faultMessageCallback(const FaultMessageInfo& fault_message_info) {
   // Use fault message messages to make some judgments
-  // fault_message_info.Print();
+  fault_message_info.Print();
   return;
 }
 
@@ -130,43 +130,31 @@ bool IsPlayEnded(HesaiLidarSdk<LidarPointXYZICRTT>& sdk)
 
 int main(int argc, char *argv[])
 {
-//#ifndef _MSC_VER
-//if (system("sudo sh -c \"echo 562144000 > /proc/sys/net/core/rmem_max\"") == -1) {
-//    printf("Command execution failed!\n");
-//  }
-//#endif
-  
   rclcpp::init(argc, argv);
-  
-  //writer.create_topic(
-  //      {"/point_cloud", "sensor_msgs/msg/PointCloud2", "cdr", ""});
-  writer.open("pointcloud");
-  
+
   HesaiLidarSdk<LidarPointXYZICRTT> sample;
   DriverParam param;
-
-  // assign param
-  // param.decoder_param.enable_packet_loss_tool = true;
-  // param.lidar_type = "XT32M2X";
   param.input_param.source_type = DATA_FROM_PCAP;
-  param.input_param.pcap_path = "hesai_lidar.pcap";
-  param.input_param.correction_file_path = "XT32M2X_Angle Correction File.csv";
-  param.input_param.firetimes_path = "PandarXT-32M2X_Firetime Correction File.csv";
 
-  //param.input_param.device_ip_address = "192.168.1.201";
-  //param.input_param.ptc_port = 9347;
-  //param.input_param.udp_port = 2368;
-  // param.input_param.rs485_com = "Your serial port name for receiving point cloud";
-  // param.input_param.rs232_com = "Your serial port name for sending cmd";
-  //param.input_param.host_ip_address = "192.168.1.200";
-  // param.input_param.multicast_ip_address = "";
+  // output path
+  std::string output_path = std::regex_replace(argv[1], std::regex("inputs"), "outputs");
+  output_path = std::regex_replace(output_path, std::regex(".pcap"), "");
+  writer.open(output_path);
+  
+  // input/correction/firetime paths
+  std::string correction_path = std::regex_replace(argv[1], std::regex("inputs.*"), "PCAPtoRosbag/correction/angle_correction/XT32M2X_Angle Correction File.csv");
+  std::string firetimes_path = std::regex_replace(argv[1], std::regex("inputs.*"), "PCAPtoRosbag/correction/firetime_correction/PandarXT-32M2X_Firetime Correction File.csv");
+  param.input_param.pcap_path = argv[1];
+  param.input_param.correction_file_path = correction_path;
+  param.input_param.firetimes_path = firetimes_path;
+  
+  // other parameters
   param.decoder_param.distance_correction_flag = false;
-  //param.decoder_param.socket_buffer_size = 262144000;
-
-  //init lidar with param
+  
+  // init lidar with param
   sample.Init(param);
 
-  //assign callback fuction
+  // assign callback fuction
   sample.RegRecvCallback(lidarCallback);
   sample.RegRecvCallback(faultMessageCallback);
 
