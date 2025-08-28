@@ -44,7 +44,6 @@
   // points_qos             : QoS options for points topic subscription. See imu_qos for details.
   // image_qos              : QoS options for image topic subscription. See imu_qos for details.
   "glim_ros": {
-    "playback_speed": 100,
     // Backend modules
     "enable_local_mapping": true,
     "enable_global_mapping": true,
@@ -71,7 +70,7 @@
     ],
     // Topics
     "imu_topic": "/imu",
-    "points_topic": "/point_cloud",
+    "points_topic": "/lidar/points",
     "image_topic": "/image",
     // QoS options
     "imu_qos": {
