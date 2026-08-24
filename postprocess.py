@@ -64,9 +64,8 @@ POINT_DTYPE = np.dtype(
 
 # IR application parameters
 
-#FOV, degrees
-FOVHOZ = 45
-FOVVER = 37
+# Camera intrinsic values, standard opencv matrix form.
+K = 
 # camera_q = qx qy qz qw rotation from lidar frame
 q_camera = np.array([0.5, 0, 0, 0.866])
 ROT_CAM = Rotation.from_quat(q_camera)
@@ -360,90 +359,199 @@ def transform_to_world(xyz_sensor, pos_interp, quat_interp):
 
 # ---------------- Colorization Processing ----------------
 
+
 def apply_pixel_colors_to_vertices_vectorized(
     image,
     height,
     width,
     rot_image,
     pos,
-    FOVhoz,
-    FOVver,
+    K,
     Verticies,
-    K
+    Z
 ):
     """
-    Vectorized version of color assignment:
-    Assigns pixel colors to K nearest projected vertices within each pixel.
+    Assign pixel colors to vertices using simple depth-based occlusion.
+
+    For each image pixel:
+        1. Find all vertices projected into that pixel.
+        2. Find the closest vertex in camera-space depth.
+        3. Apply the pixel color to that closest vertex.
+        4. Apply the same color to vertices within Z depth units
+           behind the closest vertex.
+
+    Parameters
+    ----------
+    image : np.ndarray
+        Image of shape (height, width, 3).
+
+    height : int
+        Image height.
+
+    width : int
+        Image width.
+
+    rot_image : np.ndarray
+        Camera rotation matrix, shape (3, 3).
+
+    pos : np.ndarray
+        Camera position, shape (3,).
+
+    K : np.ndarray
+        OpenCV camera intrinsic matrix:
+
+            [[fx,  0, cx],
+             [ 0, fy, cy],
+             [ 0,  0,  1]]
+
+    Verticies : np.ndarray
+        Vertex array. Columns 0:3 are XYZ coordinates and
+        columns 3:6 are RGB colors.
+
+    Z : float
+        Depth thickness used to tolerate noisy geometry.
+
+        Z = 0:
+            Only the closest vertex in each pixel receives
+            the pixel color.
+
+        Z > 0:
+            Vertices up to Z units behind the closest vertex
+            also receive the pixel color.
+
+    Returns
+    -------
+    np.ndarray
+        Updated Verticies array.
     """
 
-    # --- 1. Camera rotation and intrinsics ---
-    R_cam = rot_image
-    fx = (width / 2) / np.tan(np.deg2rad(FOVhoz) / 2)
-    fy = (height / 2) / np.tan(np.deg2rad(FOVver) / 2)
+    # ------------------------------------------------------------
+    # 1. Camera intrinsics
+    # ------------------------------------------------------------
+    fx = K[0, 0]
+    fy = K[1, 1]
+    cx = K[0, 2]
+    cy = K[1, 2]
 
-    # --- 2. Transform vertices into camera coordinates ---
-    verts_world = Verticies[:, :3]  # (N,3)
-    verts_cam = (R_cam.T @ (verts_world - pos).T) # (N,3)
-    verts_cam = verts_cam.T
-    #print(verts_world)
-    #print(verts_world - pos)
+    # ------------------------------------------------------------
+    # 2. Transform vertices into camera coordinates
+    # ------------------------------------------------------------
+    verts_world = Verticies[:, :3]
 
-    x, y, z = verts_cam[:, 0], verts_cam[:, 1], verts_cam[:, 2]
-    valid = z > 0
-    verts_cam = verts_cam[valid]
+    verts_cam = (
+        rot_image.T @ (verts_world - pos).T
+    ).T
+
+    x = verts_cam[:, 0]
+    y = verts_cam[:, 1]
+    depth = verts_cam[:, 2]
+
+    # Only vertices in front of camera
+    valid = depth > 0
+
     idx_valid = np.where(valid)[0]
-    #print(idx_valid)
 
-    # --- 3. Project into pixel coordinates ---
-    u = (fx * (x[valid] / z[valid])) + width / 2
-    v = (fy * (y[valid] / z[valid])) + height / 2
+    x = x[valid]
+    y = y[valid]
+    depth = depth[valid]
 
-    # --- 4. Filter points within the image ---
-    in_bounds = (u >= 0) & (u < width) & (v >= 0) & (v < height)
-    u, v = u[in_bounds], v[in_bounds]
+    if len(idx_valid) == 0:
+        return Verticies
+
+    # ------------------------------------------------------------
+    # 3. Project vertices using OpenCV intrinsics
+    # ------------------------------------------------------------
+    u = fx * (x / depth) + cx
+    v = fy * (y / depth) + cy
+
+    # ------------------------------------------------------------
+    # 4. Keep vertices inside image
+    # ------------------------------------------------------------
+    in_bounds = (
+        (u >= 0)
+        & (u < width)
+        & (v >= 0)
+        & (v < height)
+    )
+
+    u = u[in_bounds]
+    v = v[in_bounds]
+    depth = depth[in_bounds]
     idx_valid = idx_valid[in_bounds]
 
-    # --- 5. Round to pixel indices ---
+    if len(idx_valid) == 0:
+        return Verticies
+
+    # ------------------------------------------------------------
+    # 5. Determine which pixel each vertex belongs to
+    # ------------------------------------------------------------
     px = np.floor(u).astype(int)
     py = np.floor(v).astype(int)
-    pixel_indices = py * width + px  # flatten pixel index
 
-    # --- 6. Sort vertices by pixel and distance ---
-    # Compute projected distance from pixel center
-    du = u - (px + 0.5)
-    dv = v - (py + 0.5)
-    dist2 = du**2 + dv**2
+    pixel_indices = py * width + px
 
-    order = np.lexsort((dist2, pixel_indices))
+    # ------------------------------------------------------------
+    # 6. Sort vertices by pixel and then by depth
+    # ------------------------------------------------------------
+    #
+    # The first vertex in each pixel group will therefore be
+    # the closest vertex to the camera.
+    #
+    order = np.lexsort((depth, pixel_indices))
+
     pixel_indices = pixel_indices[order]
+    depth = depth[order]
     idx_valid = idx_valid[order]
-    dist2 = dist2[order]
 
-    # --- 7. For each pixel, take up to K nearest vertices ---
-    # Find unique pixels and their start indices
-    unique_pixels, start_idx, counts = np.unique(pixel_indices, return_index=True, return_counts=True)
+    # ------------------------------------------------------------
+    # 7. Find the closest depth for every pixel
+    # ------------------------------------------------------------
+    unique_pixels, start_idx, counts = np.unique(
+        pixel_indices,
+        return_index=True,
+        return_counts=True
+    )
 
-    # Limit K per pixel
-    keep_mask = np.zeros_like(pixel_indices, dtype=bool)
-    for i, count in enumerate(counts):
-        start = start_idx[i]
-        end = start + min(count, K)
-        keep_mask[start:end] = True
+    # Since the vertices are sorted by depth within each pixel,
+    # the first entry of each group is the closest vertex.
+    closest_depth = depth[start_idx]
+
+    # ------------------------------------------------------------
+    # 8. Determine which vertices receive the pixel color
+    # ------------------------------------------------------------
+    #
+    # Map each vertex to the closest depth of its pixel.
+    #
+    group_ids = np.repeat(
+        np.arange(len(unique_pixels)),
+        counts
+    )
+
+    closest_depth_per_vertex = closest_depth[group_ids]
+
+    # A vertex is visible/colorable if it is no more than Z
+    # behind the closest vertex.
+    #
+    # Because the vertices are sorted by depth, there cannot be
+    # be a vertex in front of closest_depth_per_vertex.
+    keep_mask = (
+        depth <= closest_depth_per_vertex + Z
+    )
 
     selected_vertices = idx_valid[keep_mask]
     selected_pixels = pixel_indices[keep_mask]
 
-    # --- 8. Assign pixel colors to selected vertices ---
-    colors = Verticies[:, 3:6].copy()  # (N,3)
+    # ------------------------------------------------------------
+    # 9. Assign pixel colors
+    # ------------------------------------------------------------
+    colors = Verticies[:, 3:6].copy()
 
-    pixel_colors = image.reshape(-1, 3)[selected_pixels]  # (M,3)
+    pixel_colors = image.reshape(-1, 3)[selected_pixels]
 
     colors[selected_vertices] = pixel_colors
 
     Verticies[:, 3:6] = colors
 
-    # --- 9. Return updated vertices ---
-    Verticies[:, 3] = colors
     return Verticies
 
 def filename_to_unix(filename):
@@ -592,8 +700,8 @@ def main(args):
             vertex_stack = apply_pixel_colors_to_vertices_vectorized(
                 pixels, height, width,
                 rot_image, pageposition,
-                FOVHOZ, FOVVER,
-                vertex_stack, 50
+                K,
+                vertex_stack, 0.05
             )
 
     print("Writing pointcloud...")
