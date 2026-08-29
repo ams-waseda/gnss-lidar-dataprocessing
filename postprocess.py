@@ -614,7 +614,7 @@ def save_ply_rgb(vertices, intensity, path):
 
     vertex_dtype = [('x', 'f4'), ('y', 'f4'), ('z', 'f4'),
                     ('red', 'u1'), ('green', 'u1'), ('blue', 'u1'),
-                    ('intensity', 'u1)]
+                    ('intensity', 'u1')]
 
     rgb = vertices[:, 3:6].astype(np.uint8)
 
