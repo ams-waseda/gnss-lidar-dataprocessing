@@ -65,7 +65,11 @@ POINT_DTYPE = np.dtype(
 # IR application parameters
 
 # Camera intrinsic values, standard opencv matrix form.
-K = 
+K = np.array([
+    [774.98646364, 0.0, 309.00747709],
+    [0.0, 770.55037689, 261.70299926],
+    [0.0, 0.0, 1.0]
+], dtype=np.float64)
 # camera_q = qx qy qz qw rotation from lidar frame
 q_camera = np.array([0.5, 0, 0, 0.866])
 ROT_CAM = Rotation.from_quat(q_camera)
