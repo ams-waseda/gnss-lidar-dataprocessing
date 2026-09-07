@@ -366,8 +366,6 @@ def transform_to_world(xyz_sensor, pos_interp, quat_interp):
 
 def apply_pixel_colors_to_vertices_vectorized(
     image,
-    height,
-    width,
     rot_image,
     pos,
     K,
@@ -429,6 +427,8 @@ def apply_pixel_colors_to_vertices_vectorized(
         Updated Verticies array.
     """
 
+    # Image info
+    height, width, _ = pixels.shape
     # ------------------------------------------------------------
     # 1. Camera intrinsics
     # ------------------------------------------------------------
@@ -688,10 +688,14 @@ def main(args):
             # Load image (RGB)
             image = Image.open(filepath).convert("RGB")
             pixels = np.array(image)  # shape (H, W, 3)
-            height, width, _ = pixels.shape
+            
 
             # NOTE: Generate timestamp from filename and convert to unix time
             timestamp = filename_to_unix(filename)
+
+            if (timestamp < tunix[0]) or (timestamp > tunix[-1])
+                #image is outside of the timestamp range.
+                continue
 
             position_index = indexfromtime(tunix, timestamp)
 
@@ -702,7 +706,7 @@ def main(args):
             rot_image = np.matmul(rot_world,ROT_CAM)
 
             vertex_stack = apply_pixel_colors_to_vertices_vectorized(
-                pixels, height, width,
+                pixels,
                 rot_image, pageposition,
                 K,
                 vertex_stack, 0.05
