@@ -634,19 +634,25 @@ def save_ply_rgb(vertices, intensity, path):
 
 def main(args):
     tlio, poslio, qlio = read_glim_trajectory(args.glim)
-    tgps, enugps, stat_gps = read_gnss_solution(args.gnss, ORGLLH)
-    enugpsi, stati = interpolate_gnss(tgps, enugps, stat_gps, tlio)
-    poslio_trans, qlio_trans = apply_initial_yaw(
-        poslio, qlio, INITIAL_YAW_DEG, enugpsi[0]
-    )
-    tsunix = _gpst_to_unix(TS_GPST)
-    teunix = _gpst_to_unix(TE_GPST)
+    try:
+        tgps, enugps, stat_gps = read_gnss_solution(args.gnss, ORGLLH)
+        enugpsi, stati = interpolate_gnss(tgps, enugps, stat_gps, tlio)
+        poslio_trans, qlio_trans = apply_initial_yaw(
+            poslio, qlio, INITIAL_YAW_DEG, enugpsi[0]
+        )
+        tsunix = _gpst_to_unix(TS_GPST)
+        teunix = _gpst_to_unix(TE_GPST)
 
-    graph, initials, loop_pairs = build_factor_graph(
-        qlio_trans, enugpsi, stati, qlio, poslio
-    )
-    results = optimize(graph, initials)
-    x_est, rpy_est, q_est = extract_estimates(results, len(tlio))
+        graph, initials, loop_pairs = build_factor_graph(
+            qlio_trans, enugpsi, stati, qlio, poslio
+        )
+        results = optimize(graph, initials)
+        # rpy_est goes unused, not sure why we store it.
+        x_est, rpy_est, q_est = extract_estimates(results, len(tlio))
+    except:
+        print("GNSS unavailable.")
+        x_est = poslio
+        q_est = qlio
     
     print("Reading rosbag...")
     t0 = time.perf_counter()
@@ -654,8 +660,10 @@ def main(args):
     print(f"  total points: {len(pc):,}  ({time.perf_counter()-t0:.2f}s)")
 
     print("Selecting points...")
+    # I have no idea why we have two distinct time filters.
+    # This is a temporary fix to make it non-GNSS compatable.
     xyz, intensity, tunix = filter_points(
-        pc, tsunix, teunix, tlio[0], tlio[-1]
+        pc, tlio[0], tlio[-1], tlio[0], tlio[-1]
     )
     print(f"  after filter: {len(xyz):,} / {len(pc):,}")
 
