@@ -701,7 +701,7 @@ def main(args):
             # NOTE: Generate timestamp from filename and convert to unix time
             timestamp = filename_to_unix(filename)
 
-            if (timestamp < tunix[0]) or (timestamp > tunix[-1])
+            if (timestamp < tunix[0]) or (timestamp > tunix[-1]):
                 #image is outside of the timestamp range.
                 continue
 
