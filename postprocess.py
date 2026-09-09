@@ -608,26 +608,42 @@ def write_ply(path: Path, xyz: np.ndarray, intensity: np.ndarray):
 
 def save_ply_rgb(vertices, intensity, path):
     """
-    Save XYZ + grayscale as standard RGB .ply (appears gray in viewers).
-    vertices: (N, 7) array [x, y, z, r, g, b, intensity]
+    Save XYZ + RGB + intensity as a PLY file.
+
+    vertices: (N, 6) array [x, y, z, r, g, b]
+    intensity: (N,) array
     """
 
-    vertex_dtype = [('x', 'f4'), ('y', 'f4'), ('z', 'f4'),
-                    ('red', 'u1'), ('green', 'u1'), ('blue', 'u1'),
-                    ('intensity', 'u1')]
+    vertex = np.empty(
+        len(vertices),
+        dtype=[
+            ("x", "<f4"),
+            ("y", "<f4"),
+            ("z", "<f4"),
+            ("red", "u1"),
+            ("green", "u1"),
+            ("blue", "u1"),
+            ("intensity", "u1"),
+        ],
+    )
+
+    vertex["x"] = vertices[:, 0]
+    vertex["y"] = vertices[:, 1]
+    vertex["z"] = vertices[:, 2]
 
     rgb = vertices[:, 3:6].astype(np.uint8)
 
-    data['red'] = rgb[:, 0]
-    data['green'] = rgb[:, 1]
-    data['blue'] = rgb[:, 2]
-    data['x'], data['y'], data['z'] = vertices[:, 0], vertices[:, 1], vertices[:, 2]
-    data['intensity'] = intensity
-    #data['red'] = data['green'] = data['blue'] = gray
+    vertex["red"] = rgb[:, 0]
+    vertex["green"] = rgb[:, 1]
+    vertex["blue"] = rgb[:, 2]
 
-    el = PlyElement.describe(data, 'vertex')
-    PlyData([el], text=False, byte_order="<",).write(path)
-    print(f"Saved {vertices.shape[0]} vertices with grayscale (RGB) color to {path}")
+    vertex["intensity"] = intensity.astype(np.uint8)
+
+    el = PlyElement.describe(vertex, "vertex")
+    PlyData([el], text=False, byte_order="<").write(path)
+
+    print(f"Saved {len(vertices)} vertices with RGB color to {path}")
+
 
 
 # ---------------- Orchestration ----------------
@@ -668,21 +684,24 @@ def main(args):
     print(f"  after filter: {len(xyz):,} / {len(pc):,}")
 
     print("Pose interpolation...")
-    pos_interp, quat_interp = interpolate_pose(tunix, tlio, x_est, q_est)
+    pos_interp, quat_interp = interpolate_pose(tunix, tlio, x_est, q_est.as_quat())
 
     print("Transformation...")
     xyz_world, finite = transform_to_world(xyz, pos_interp, quat_interp)
     intensity = intensity[finite]
 
     print("Colorization...")
+    n = xyz_world.shape[0]
+
     vertex_stack = np.stack([
         xyz_world[:, 0],
         xyz_world[:, 1],
         xyz_world[:, 2],
-        np.zeros(ply_data['vertex'].data['x'].size),  # R
-        np.zeros(ply_data['vertex'].data['x'].size),  # G
-        np.zeros(ply_data['vertex'].data['x'].size)   # B
+        np.zeros(n),
+        np.zeros(n),
+        np.zeros(n)
     ], axis=-1)
+
 
     #times = tunix
     #pos = pos_interp
@@ -721,7 +740,7 @@ def main(args):
             )
 
     print("Writing pointcloud...")
-    write_ply(vertex_stack, intensity, args.out)
+    save_ply_rgb(vertex_stack, intensity, args.out)
     print(f"Wrote {args.out}  ({len(xyz_world):,} points)")
 
 
