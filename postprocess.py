@@ -667,6 +667,7 @@ def main(args):
         x_est, rpy_est, q_est = extract_estimates(results, len(tlio))
     except:
         print("GNSS unavailable.")
+        tlio = tlio - LEAP_SEC
         x_est = poslio
         q_est = qlio
     
