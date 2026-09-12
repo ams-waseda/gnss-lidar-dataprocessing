@@ -709,7 +709,7 @@ def main(args):
     #quat = quat_interp
 
     for filename in os.listdir(args.img):
-        if filename.lower().endswith((".jpg", ".jpeg")):
+        if filename.lower().endswith((".tiff", ".jpeg", ".jpg")):
             filepath = os.path.join(args.img, filename)
             print(f"\nProcessing file: {filename}")
 
