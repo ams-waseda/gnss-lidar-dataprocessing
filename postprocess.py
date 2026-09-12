@@ -428,7 +428,7 @@ def apply_pixel_colors_to_vertices_vectorized(
     """
 
     # Image info
-    height, width, _ = pixels.shape
+    height, width, _ = image.shape
     # ------------------------------------------------------------
     # 1. Camera intrinsics
     # ------------------------------------------------------------
@@ -730,8 +730,8 @@ def main(args):
             pageposition = pos_interp[position_index]
 
             q_lidar = quat_interp[position_index]
-            rot_world = Rotation.from_quat(q_lidar)
-            rot_image = np.matmul(rot_world,ROT_CAM)
+            rot_world = Rotation.from_quat(q_lidar.as_quat())
+            rot_image = np.matmul(rot_world.as_matrix(),ROT_CAM.as_matrix())
 
             vertex_stack = apply_pixel_colors_to_vertices_vectorized(
                 pixels,
