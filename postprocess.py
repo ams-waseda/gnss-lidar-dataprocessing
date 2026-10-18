@@ -66,12 +66,15 @@ POINT_DTYPE = np.dtype(
 
 # Camera intrinsic values, standard opencv matrix form.
 K = np.array([
-    [774.98646364, 0.0, 309.00747709],
-    [0.0, 770.55037689, 261.70299926],
+    [808.95296262, 0.0, 365.22137067],
+    [0.0, 789.09771349, 261.07802709],
     [0.0, 0.0, 1.0]
 ], dtype=np.float64)
+
 # camera_q = qx qy qz qw rotation from lidar frame
 q_camera = np.array([0.5, 0, 0, 0.866])
+#q_camera = np.array([0.573, 0.015, -0.021, 0.819])
+#q_camera = np.array([-0.620, 0.07, -0.066, 0.778])
 ROT_CAM = Rotation.from_quat(q_camera)
 
 
@@ -669,7 +672,7 @@ def main(args):
         print("GNSS unavailable.")
         tlio = tlio - LEAP_SEC
         x_est = poslio
-        q_est = qlio
+        q_est = qlio.as_quat()
     
     print("Reading rosbag...")
     t0 = time.perf_counter()
@@ -685,7 +688,7 @@ def main(args):
     print(f"  after filter: {len(xyz):,} / {len(pc):,}")
 
     print("Pose interpolation...")
-    pos_interp, quat_interp = interpolate_pose(tunix, tlio, x_est, q_est.as_quat())
+    pos_interp, quat_interp = interpolate_pose(tunix, tlio, x_est, q_est)
 
     print("Transformation...")
     xyz_world, finite = transform_to_world(xyz, pos_interp, quat_interp)
@@ -709,7 +712,7 @@ def main(args):
     #quat = quat_interp
 
     for filename in os.listdir(args.img):
-        if filename.lower().endswith((".tiff", ".jpeg", ".jpg")):
+        if filename.lower().endswith((".tiff", ".TIFF")):
             filepath = os.path.join(args.img, filename)
             print(f"\nProcessing file: {filename}")
 
