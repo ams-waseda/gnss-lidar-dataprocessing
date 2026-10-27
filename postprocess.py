@@ -7,8 +7,9 @@ import numpy as np
 import pandas as pd
 import pymap3d as pm
 import os
+import re
+import cv2
 from gtsam.symbol_shorthand import P
-#from matplotlib.gridspec import GridSpec
 from scipy.interpolate import interp1d
 from scipy.spatial.transform import Rotation, Slerp
 from mcap.exceptions import EndOfFile
@@ -17,6 +18,8 @@ from mcap_ros2.decoder import DecoderFactory
 from plyfile import PlyData, PlyElement
 from PIL import Image
 from datetime import datetime
+from scipy.ndimage import distance_transform_edt
+from scipy.optimize import minimize
 
 
 # ---------------- Parameters ----------------
@@ -74,6 +77,14 @@ q_camera = np.array([0.5, 0, 0, 0.866])
 #q_camera = np.array([0.573, 0.015, -0.021, 0.819])
 #q_camera = np.array([-0.620, 0.07, -0.066, 0.778])
 ROT_CAM = Rotation.from_quat(q_camera)
+
+# Intrinsic matrix of RGB camera
+# NOTE: UPDATE THIS!
+K_RGB = np.array([
+    [808.95296262, 0.0, 365.22137067],
+    [0.0, 789.09771349, 261.07802709],
+    [0.0, 0.0, 1.0]
+], dtype=np.float64)
 
 
 # ---------------- Time helpers ----------------
@@ -372,6 +383,8 @@ def apply_pixel_colors_to_vertices_vectorized(
     K,
     Verticies,
     Z
+    #K_RGB,
+    #RGB_image
 ):
     """
     Assign pixel colors to vertices using simple depth-based occlusion.
@@ -559,6 +572,214 @@ def apply_pixel_colors_to_vertices_vectorized(
 
     return Verticies
 
+
+def refine_lidar_camera_rotation(
+    RGB_image,
+    Verticies,
+    rot_image,
+    pos,
+    K_RGB,
+    lidar_edge_mask=None,
+    max_rotation_deg=5.0,
+    max_iterations=150,
+    sample_size=20000,
+):
+    """
+    Refine the LiDAR-to-camera rotation by aligning projected
+    LiDAR points with edges in the RGB image.
+
+    Assumptions
+    -----------
+    rot_image maps camera coordinates to world coordinates.
+    pos is the camera origin in world coordinates.
+    RGB and IR cameras have effectively identical extrinsics.
+
+    Parameters
+    ----------
+    RGB_image : np.ndarray
+        RGB image (H, W, 3).
+
+    Verticies : np.ndarray
+        Point cloud; columns 0:3 contain XYZ world coordinates.
+
+    rot_image : np.ndarray
+        Initial camera-to-world rotation, shape (3, 3).
+
+    pos : np.ndarray
+        Camera position in world coordinates, shape (3,).
+
+    K_RGB : np.ndarray
+        RGB camera intrinsic matrix, shape (3, 3).
+
+    lidar_edge_mask : np.ndarray or None
+        Boolean mask of length len(Verticies), selecting LiDAR
+        points likely to lie on geometric edges. If None, all
+        points are used (less reliable).
+
+    max_rotation_deg : float
+        Maximum absolute correction per rotation-vector component.
+
+    max_iterations : int
+        Maximum number of optimizer iterations.
+
+    sample_size : int
+        Maximum number of points used by the objective.
+
+    Returns
+    -------
+    R_refined : np.ndarray
+        Refined camera-to-world rotation.
+
+    delta_rotvec : np.ndarray
+        Estimated correction rotation vector, in radians.
+
+    result : OptimizeResult
+        SciPy optimization result.
+    """
+
+    height, width = RGB_image.shape[:2]
+    points = np.asarray(Verticies[:, :3], dtype=np.float64)
+
+    # --------------------------------------------------
+    # 1. Extract RGB image edges and distance transform
+    # --------------------------------------------------
+    gray = cv2.cvtColor(RGB_image, cv2.COLOR_RGB2GRAY)
+
+    # Light smoothing reduces sensitivity to image noise.
+    gray = cv2.GaussianBlur(gray, (5, 5), 1.0)
+
+    edges = cv2.Canny(gray, 50, 150)
+
+    # Distance to nearest edge, in pixels.
+    # Edge pixels are zero-valued in the distance-transform input.
+    distance_map = distance_transform_edt(edges == 0)
+
+    # --------------------------------------------------
+    # 2. Select LiDAR points
+    # --------------------------------------------------
+    valid = np.all(np.isfinite(points), axis=1)
+
+    if lidar_edge_mask is not None:
+        valid &= np.asarray(lidar_edge_mask, dtype=bool)
+
+    points = points[valid]
+
+    if len(points) < 20:
+        raise ValueError(
+            "Too few valid LiDAR points for rotation refinement."
+        )
+
+    # Deterministic subsampling for speed.
+    if len(points) > sample_size:
+        indices = np.linspace(
+            0, len(points) - 1, sample_size
+        ).astype(int)
+        points = points[indices]
+
+    # --------------------------------------------------
+    # 3. Camera intrinsics
+    # --------------------------------------------------
+    fx = K_RGB[0, 0]
+    fy = K_RGB[1, 1]
+    cx = K_RGB[0, 2]
+    cy = K_RGB[1, 2]
+
+    # Initial camera-frame coordinates.
+    points_cam0 = (
+        rot_image.T @ (points - pos).T
+    ).T
+
+    # --------------------------------------------------
+    # 4. Rotation-only projection objective
+    # --------------------------------------------------
+    def objective(delta_rotvec):
+        R_delta = Rotation.from_rotvec(
+            delta_rotvec
+        ).as_matrix()
+
+        # Apply a local correction in camera coordinates.
+        points_cam = (R_delta.T @ points_cam0.T).T
+
+        depth = points_cam[:, 2]
+
+        front = (
+            (depth > 0.05)
+            & np.isfinite(depth)
+        )
+
+        if np.count_nonzero(front) < 20:
+            return 1e6
+
+        p = points_cam[front]
+        d = depth[front]
+
+        u = fx * p[:, 0] / d + cx
+        v = fy * p[:, 1] / d + cy
+
+        inside = (
+            (u >= 0)
+            & (u < width)
+            & (v >= 0)
+            & (v < height)
+        )
+
+        # Penalize rotations that project points outside the image.
+        coverage = np.mean(inside)
+
+        if np.count_nonzero(inside) < 20:
+            return 1e5 + 1e4 * (1.0 - coverage)
+
+        px = np.clip(
+            np.rint(u[inside]).astype(int), 0, width - 1
+        )
+        py = np.clip(
+            np.rint(v[inside]).astype(int), 0, height - 1
+        )
+
+        distances = distance_map[py, px]
+
+        # Robust penalty: large mismatches cannot dominate.
+        # The 10-pixel cap limits the influence of unrelated edges.
+        distances = np.minimum(distances, 10.0)
+
+        # Favor points close to image edges.
+        alignment_error = np.mean(distances)
+
+        return alignment_error + 10.0 * (1.0 - coverage)
+
+    # --------------------------------------------------
+    # 5. Optimize the rotation correction
+    # --------------------------------------------------
+    limit = np.deg2rad(max_rotation_deg)
+
+    result = minimize(
+        objective,
+        x0=np.zeros(3),
+        method="Powell",
+        bounds=[
+            (-limit, limit),
+            (-limit, limit),
+            (-limit, limit),
+        ],
+        options={
+            "maxiter": max_iterations,
+            "xtol": 1e-5,
+            "ftol": 1e-5,
+        },
+    )
+
+    delta_rotvec = result.x
+
+    R_delta = Rotation.from_rotvec(
+        delta_rotvec
+    ).as_matrix()
+
+    R_refined = rot_image @ R_delta
+
+    return R_refined, delta_rotvec, result
+
+
+
 def filename_to_unix(filename):
     # Remove extension
     name = os.path.splitext(filename)[0]
@@ -710,7 +931,7 @@ def main(args):
     #quat = quat_interp
 
     for filename in os.listdir(args.img):
-        if filename.lower().endswith((".tiff", ".TIFF")):
+        if filename.lower().endswith((".tiff")):
             filepath = os.path.join(args.img, filename)
             print(f"\nProcessing file: {filename}")
 
@@ -739,6 +960,20 @@ def main(args):
             pixels = (
                 colors[idx] * (1 - frac) + colors[idx + 1] * frac
             ).astype(np.uint8)
+
+            # Extract the shared timestamp
+            timestamp = filename.split("_IR")[0]
+
+            # Find the corresponding RGB image
+            rgb_filepath = os.path.join(args.img, f"{timestamp}_8b.JPG")
+            
+
+            print(f"Corresponding RGB file: {os.path.basename(rgb_filepath)}")
+
+            # Load RGB image
+            RGB_image = np.array(
+                Image.open(rgb_filepath).convert("RGB")
+            )
             
 
             # NOTE: Generate timestamp from filename and convert to unix time
@@ -756,11 +991,36 @@ def main(args):
             rot_world = Rotation.from_quat(q_lidar.as_quat())
             rot_image = np.matmul(rot_world.as_matrix(),ROT_CAM.as_matrix())
 
+            R_refined, delta_rotvec, result = (
+                refine_lidar_camera_rotation(
+                    RGB_image=RGB_image,
+                    Verticies=vertex_stack,
+                    rot_image=rot_image,
+                    pos=pageposition,
+                    K_RGB=K_RGB,
+                    lidar_edge_mask=None,
+                    max_rotation_deg=5.0,
+                    max_iterations=150,
+                )
+            )
+
+            print(
+                "Estimated rotation correction (degrees):",
+                np.round(np.rad2deg(delta_rotvec), 4)
+            )
+
+            print(
+                "Final alignment objective:",
+                result.fun
+            )
+
+
             vertex_stack = apply_pixel_colors_to_vertices_vectorized(
                 pixels,
                 rot_image, pageposition,
                 K,
                 vertex_stack, 0.05
+                #K_RGB, RGB_image
             )
 
     print("Writing pointcloud...")
