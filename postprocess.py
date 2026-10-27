@@ -3,8 +3,6 @@ import time
 from pathlib import Path
 
 import gtsam
-#import matplotlib
-#import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pymap3d as pm
@@ -716,9 +714,31 @@ def main(args):
             filepath = os.path.join(args.img, filename)
             print(f"\nProcessing file: {filename}")
 
-            # Load image (RGB)
-            image = Image.open(filepath).convert("RGB")
-            pixels = np.array(image)  # shape (H, W, 3)
+
+            # Load grayscale IR image
+            image = Image.open(filepath).convert("L")
+            gray = np.array(image, dtype=np.float32)
+
+            # Normalize intensity to [0, 1]
+            gray = (gray - gray.min()) / (gray.max() - gray.min() + 1e-8)
+
+            # Define thermal color stops: blue -> cyan -> green -> yellow -> red
+            colors = np.array([
+                [0,   0,   255],  # Blue: cold
+                [0,   255, 255],  # Cyan
+                [0,   255,   0],  # Green
+                [255, 255,   0],  # Yellow
+                [255, 0,     0],  # Red: hot
+            ], dtype=np.float32)
+
+            # Interpolate RGB values for every pixel
+            x = gray * (len(colors) - 1)
+            idx = np.minimum(x.astype(np.int32), len(colors) - 2)
+            frac = (x - idx)[..., np.newaxis]
+
+            pixels = (
+                colors[idx] * (1 - frac) + colors[idx + 1] * frac
+            ).astype(np.uint8)
             
 
             # NOTE: Generate timestamp from filename and convert to unix time
