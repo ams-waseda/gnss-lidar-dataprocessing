@@ -935,7 +935,7 @@ def main(args):
         if filename.lower().endswith(".tiff")
     ])
 
-    for filename in oimage_files[::args.skip]:
+    for filename in image_files[::args.skip]:
         filepath = os.path.join(args.img, filename)
         print(f"\nProcessing file: {filename}")
 
