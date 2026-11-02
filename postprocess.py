@@ -930,98 +930,101 @@ def main(args):
     #pos = pos_interp
     #quat = quat_interp
 
-    for filename in os.listdir(args.img):
-        if filename.lower().endswith((".tiff")):
-            filepath = os.path.join(args.img, filename)
-            print(f"\nProcessing file: {filename}")
+    image_files = sorted([
+        filename for filename in os.listdir(args.img)
+        if filename.lower().endswith(".tiff")
+    ])
+
+    for filename in oimage_files[::args.skip]:
+        filepath = os.path.join(args.img, filename)
+        print(f"\nProcessing file: {filename}")
 
 
-            # Load grayscale IR image
-            image = Image.open(filepath).convert("L")
-            gray = np.array(image, dtype=np.float32)
+        # Load grayscale IR image
+        image = Image.open(filepath).convert("L")
+        gray = np.array(image, dtype=np.float32)
 
-            # Normalize intensity to [0, 1]
-            gray = (gray - gray.min()) / (gray.max() - gray.min() + 1e-8)
+        # Normalize intensity to [0, 1]
+        gray = (gray - gray.min()) / (gray.max() - gray.min() + 1e-8)
 
-            # Define thermal color stops: blue -> cyan -> green -> yellow -> red
-            colors = np.array([
-                [0,   0,   255],  # Blue: cold
-                [0,   255, 255],  # Cyan
-                [0,   255,   0],  # Green
-                [255, 255,   0],  # Yellow
-                [255, 0,     0],  # Red: hot
-            ], dtype=np.float32)
+        # Define thermal color stops: blue -> cyan -> green -> yellow -> red
+        colors = np.array([
+            [0,   0,   255],  # Blue: cold
+            [0,   255, 255],  # Cyan
+            [0,   255,   0],  # Green
+            [255, 255,   0],  # Yellow
+            [255, 0,     0],  # Red: hot
+        ], dtype=np.float32)
 
-            # Interpolate RGB values for every pixel
-            x = gray * (len(colors) - 1)
-            idx = np.minimum(x.astype(np.int32), len(colors) - 2)
-            frac = (x - idx)[..., np.newaxis]
+        # Interpolate RGB values for every pixel
+        x = gray * (len(colors) - 1)
+        idx = np.minimum(x.astype(np.int32), len(colors) - 2)
+        frac = (x - idx)[..., np.newaxis]
 
-            pixels = (
-                colors[idx] * (1 - frac) + colors[idx + 1] * frac
-            ).astype(np.uint8)
+        pixels = (
+            colors[idx] * (1 - frac) + colors[idx + 1] * frac
+        ).astype(np.uint8)
 
-            # Extract the shared timestamp
-            timestamp = filename.split("_IR")[0]
+        # Extract the shared timestamp
+        timestamp = filename.split("_IR")[0]
 
-            # Find the corresponding RGB image
-            rgb_filepath = os.path.join(args.img, f"{timestamp}_8b.JPG")
+        # Find the corresponding RGB image
+        rgb_filepath = os.path.join(args.img, f"{timestamp}_8b.JPG")
             
 
-            print(f"Corresponding RGB file: {os.path.basename(rgb_filepath)}")
+        print(f"Corresponding RGB file: {os.path.basename(rgb_filepath)}")
 
-            # Load RGB image
-            RGB_image = np.array(
-                Image.open(rgb_filepath).convert("RGB")
-            )
+        # Load RGB image
+        RGB_image = np.array(
+            Image.open(rgb_filepath).convert("RGB")
+        )
             
 
-            # NOTE: Generate timestamp from filename and convert to unix time
-            timestamp = filename_to_unix(filename)
+        # NOTE: Generate timestamp from filename and convert to unix time
+        timestamp = filename_to_unix(filename)
 
-            if (timestamp < tunix[0]) or (timestamp > tunix[-1]):
-                #image is outside of the timestamp range.
-                continue
+        if (timestamp < tunix[0]) or (timestamp > tunix[-1]):
+            #image is outside of the timestamp range.
+            continue
 
-            position_index = indexfromtime(tunix, timestamp)
+        position_index = indexfromtime(tunix, timestamp)
 
-            pageposition = pos_interp[position_index]
+        pageposition = pos_interp[position_index]
 
-            q_lidar = quat_interp[position_index]
-            rot_world = Rotation.from_quat(q_lidar.as_quat())
-            rot_image = np.matmul(rot_world.as_matrix(),ROT_CAM.as_matrix())
+        q_lidar = quat_interp[position_index]
+        rot_world = Rotation.from_quat(q_lidar.as_quat())
+        rot_image = np.matmul(rot_world.as_matrix(),ROT_CAM.as_matrix())
 
-            R_refined, delta_rotvec, result = (
-                refine_lidar_camera_rotation(
-                    RGB_image=RGB_image,
-                    Verticies=vertex_stack,
-                    rot_image=rot_image,
-                    pos=pageposition,
-                    K_RGB=K_RGB,
-                    lidar_edge_mask=None,
-                    max_rotation_deg=5.0,
-                    max_iterations=150,
-                )
+        R_refined, delta_rotvec, result = (
+            refine_lidar_camera_rotation(
+                RGB_image=RGB_image,
+                Verticies=vertex_stack,
+                rot_image=rot_image,
+                pos=pageposition,
+                K_RGB=K_RGB,
+                lidar_edge_mask=None,
+                max_rotation_deg=5.0,
+                max_iterations=150,
             )
+        )
 
-            print(
-                "Estimated rotation correction (degrees):",
-                np.round(np.rad2deg(delta_rotvec), 4)
-            )
+        print(
+            "Estimated rotation correction (degrees):",
+            np.round(np.rad2deg(delta_rotvec), 4)
+        )
 
-            print(
-                "Final alignment objective:",
-                result.fun
-            )
+        print(
+            "Final alignment objective:",
+            result.fun
+        )
 
 
-            vertex_stack = apply_pixel_colors_to_vertices_vectorized(
-                pixels,
-                rot_image, pageposition,
-                K,
-                vertex_stack, 0.05
-                #K_RGB, RGB_image
-            )
+        vertex_stack = apply_pixel_colors_to_vertices_vectorized(
+            pixels,
+            rot_image, pageposition,
+            K,
+            vertex_stack, 0.05
+        )
 
     print("Writing pointcloud...")
     save_ply_rgb(vertex_stack, intensity, args.out)
@@ -1054,6 +1057,12 @@ def parse_args():
     p.add_argument(
         "--out", type=Path, default=BASEPATH / default_out,
         help=f"output PLY (default: data/{default_out})",
+    )
+    p.add_argument(
+        "--skip",
+        type=int,
+        default=1,
+        help="Process every Nth image (default: 1)"
     )
     return p.parse_args()
 
