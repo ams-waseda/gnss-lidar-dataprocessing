@@ -81,8 +81,8 @@ ROT_CAM = Rotation.from_quat(q_camera)
 # Intrinsic matrix of RGB camera
 # NOTE: UPDATE THIS!
 K_RGB = np.array([
-    [808.95296262, 0.0, 365.22137067],
-    [0.0, 789.09771349, 261.07802709],
+    [4158.74720, 0.0, 1940.99516],
+    [0.0, 4161.16586, 1512.04676],
     [0.0, 0.0, 1.0]
 ], dtype=np.float64)
 
