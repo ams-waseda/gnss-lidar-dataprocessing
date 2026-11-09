@@ -43,7 +43,6 @@ LEAP_SEC = 18                       # GPST - UTC seconds
 # 3D pointcloud construction time window (GPST, naive)
 TS_GPST = pd.Timestamp("2026-01-29 04:45:23")
 TE_GPST = pd.Timestamp("2026-01-29 04:45:51")
-LEAP_SEC = 18  # GPST - UTC seconds
 
 RNG_MIN = 1.0          # short-range rejection threshold (m)
 RNG_MAX = 100.0        # long-range rejection threshold (m)
@@ -466,6 +465,7 @@ def apply_pixel_colors_to_vertices_vectorized(
 
     # Only vertices in front of camera
     valid = depth > 0
+    valid = valid < 40
 
     idx_valid = np.where(valid)[0]
 
@@ -566,7 +566,19 @@ def apply_pixel_colors_to_vertices_vectorized(
 
     pixel_colors = image.reshape(-1, 3)[selected_pixels]
 
-    colors[selected_vertices] = pixel_colors
+    # Get the current colors of the selected vertices
+    existing_colors = colors[selected_vertices]
+
+    # Check which vertices already have a nonzero color
+    has_color = np.any(existing_colors != 0, axis=1)
+
+    # Average where a color already exists
+    colors[selected_vertices[has_color]] = (
+        existing_colors[has_color] + pixel_colors[has_color]
+    ) / 2
+
+    # Overwrite where the existing color is zero
+    colors[selected_vertices[~has_color]] = pixel_colors[~has_color]
 
     Verticies[:, 3:6] = colors
 
@@ -1021,7 +1033,7 @@ def main(args):
 
         vertex_stack = apply_pixel_colors_to_vertices_vectorized(
             pixels,
-            rot_image, pageposition,
+            R_refined, pageposition,
             K,
             vertex_stack, 0.05
         )
