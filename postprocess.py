@@ -464,8 +464,7 @@ def apply_pixel_colors_to_vertices_vectorized(
     depth = verts_cam[:, 2]
 
     # Only vertices in front of camera
-    valid = depth > 0
-    valid = valid < 40
+    valid = (depth > 0) & (depth < 40)
 
     idx_valid = np.where(valid)[0]
 
@@ -562,25 +561,29 @@ def apply_pixel_colors_to_vertices_vectorized(
     # ------------------------------------------------------------
     # 9. Assign pixel colors
     # ------------------------------------------------------------
-    colors = Verticies[:, 3:6].copy()
 
     pixel_colors = image.reshape(-1, 3)[selected_pixels]
 
-    # Get the current colors of the selected vertices
-    existing_colors = colors[selected_vertices]
+    # Get current colors of selected vertices
+    existing_colors = Verticies[selected_vertices, 3:6].copy()
 
-    # Check which vertices already have a nonzero color
+    # Identify vertices that already have a color
     has_color = np.any(existing_colors != 0, axis=1)
 
+    # Start with existing colors
+    new_colors = existing_colors.copy()
+
     # Average where a color already exists
-    colors[selected_vertices[has_color]] = (
-        existing_colors[has_color] + pixel_colors[has_color]
-    ) / 2
+    new_colors[has_color] = (
+        existing_colors[has_color].astype(np.float32)
+        + pixel_colors[has_color].astype(np.float32)
+    ) / 2.0
 
-    # Overwrite where the existing color is zero
-    colors[selected_vertices[~has_color]] = pixel_colors[~has_color]
+    # Assign new colors where no color exists
+    new_colors[~has_color] = pixel_colors[~has_color]
 
-    Verticies[:, 3:6] = colors
+    # Update vertex colors
+    Verticies[selected_vertices, 3:6] = new_colors
 
     return Verticies
 
@@ -1015,7 +1018,7 @@ def main(args):
                 pos=pageposition,
                 K_RGB=K_RGB,
                 lidar_edge_mask=None,
-                max_rotation_deg=5.0,
+                max_rotation_deg=2.0,
                 max_iterations=150,
             )
         )
