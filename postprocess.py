@@ -562,27 +562,21 @@ def apply_pixel_colors_to_vertices_vectorized(
     # 9. Assign pixel colors
     # ------------------------------------------------------------
 
-    pixel_colors = image.reshape(-1, 3)[selected_pixels]
+    pixel_colors = image.reshape(-1, 3)[selected_pixels].astype(np.float32)
 
-    # Get current colors of selected vertices
-    existing_colors = Verticies[selected_vertices, 3:6].copy()
+    existing_colors = Verticies[selected_vertices, 3:6].astype(np.float32)
 
     # Identify vertices that already have a color
     has_color = np.any(existing_colors != 0, axis=1)
 
-    # Start with existing colors
-    new_colors = existing_colors.copy()
+    # Calculate updated colors
+    new_colors = np.where(
+        has_color[:, None],
+        (existing_colors + pixel_colors) / 2.0,
+        pixel_colors
+    )
 
-    # Average where a color already exists
-    new_colors[has_color] = (
-        existing_colors[has_color].astype(np.float32)
-        + pixel_colors[has_color].astype(np.float32)
-    ) / 2.0
-
-    # Assign new colors where no color exists
-    new_colors[~has_color] = pixel_colors[~has_color]
-
-    # Update vertex colors
+    # Update vertices
     Verticies[selected_vertices, 3:6] = new_colors
 
     return Verticies
@@ -999,7 +993,7 @@ def main(args):
         timestamp = filename_to_unix(filename)
 
         if (timestamp < tunix[0]) or (timestamp > tunix[-1]):
-            #image is outside of the timestamp range.
+            print("image is outside of the timestamp range.")
             continue
 
         position_index = indexfromtime(tunix, timestamp)
