@@ -18,7 +18,7 @@ from mcap_ros2.decoder import DecoderFactory
 from plyfile import PlyData, PlyElement
 from PIL import Image
 from datetime import datetime
-from scipy.ndimage import distance_transform_edt
+from scipy.ndimage import distance_transform_edt, map_coordinates
 from scipy.optimize import minimize
 
 
@@ -84,6 +84,26 @@ K_RGB = np.array([
     [0.0, 4161.16586, 1512.04676],
     [0.0, 0.0, 1.0]
 ], dtype=np.float64)
+
+# ---------------- Camera Rotation Refinement ----------------
+
+ROTATION_MAX_DEG = 20.0
+
+ROTATION_MAX_RANGE = 20.0
+ROTATION_MIN_RANGE = 1.0
+
+ROTATION_SAMPLE_SIZE = 30000
+
+ROTATION_MAX_EDGE_DISTANCE = 12.0
+
+ROTATION_GRID_X = 8
+ROTATION_GRID_Y = 6
+
+ROTATION_MIN_CELL_POINTS = 10
+ROTATION_MIN_VALID_CELLS = 4
+
+ROTATION_COVERAGE_WEIGHT = 0
+ROTATION_REGULARIZATION = 0.05
 
 
 # ---------------- Time helpers ----------------
@@ -464,7 +484,7 @@ def apply_pixel_colors_to_vertices_vectorized(
     depth = verts_cam[:, 2]
 
     # Only vertices in front of camera
-    valid = (depth > 0) & (depth < 40)
+    valid = (depth > 0) & (depth < 20)
 
     idx_valid = np.where(valid)[0]
 
@@ -582,6 +602,7 @@ def apply_pixel_colors_to_vertices_vectorized(
     return Verticies
 
 
+
 def refine_lidar_camera_rotation(
     RGB_image,
     Verticies,
@@ -591,132 +612,202 @@ def refine_lidar_camera_rotation(
     lidar_edge_mask=None,
     max_rotation_deg=5.0,
     max_iterations=150,
-    sample_size=20000,
+    sample_size=30000,
+    max_range=40.0,
+    min_range=1.0,
+    max_edge_distance=12.0,
+    grid_x=8,
+    grid_y=6,
+    min_cell_points=10,
+    min_valid_cells=4,
+    coverage_weight=8.0,
+    regularization=0.05,
 ):
     """
-    Refine the LiDAR-to-camera rotation by aligning projected
-    LiDAR points with edges in the RGB image.
+    Refine LiDAR-to-camera rotation using robust,
+    spatially balanced RGB edge alignment.
 
-    Assumptions
-    -----------
     rot_image maps camera coordinates to world coordinates.
-    pos is the camera origin in world coordinates.
-    RGB and IR cameras have effectively identical extrinsics.
+    pos is camera position in world coordinates.
 
-    Parameters
-    ----------
-    RGB_image : np.ndarray
-        RGB image (H, W, 3).
-
-    Verticies : np.ndarray
-        Point cloud; columns 0:3 contain XYZ world coordinates.
-
-    rot_image : np.ndarray
-        Initial camera-to-world rotation, shape (3, 3).
-
-    pos : np.ndarray
-        Camera position in world coordinates, shape (3,).
-
-    K_RGB : np.ndarray
-        RGB camera intrinsic matrix, shape (3, 3).
-
-    lidar_edge_mask : np.ndarray or None
-        Boolean mask of length len(Verticies), selecting LiDAR
-        points likely to lie on geometric edges. If None, all
-        points are used (less reliable).
-
-    max_rotation_deg : float
-        Maximum absolute correction per rotation-vector component.
-
-    max_iterations : int
-        Maximum number of optimizer iterations.
-
-    sample_size : int
-        Maximum number of points used by the objective.
-
-    Returns
-    -------
-    R_refined : np.ndarray
-        Refined camera-to-world rotation.
-
-    delta_rotvec : np.ndarray
-        Estimated correction rotation vector, in radians.
-
-    result : OptimizeResult
-        SciPy optimization result.
+    The objective:
+        1. Uses only initially visible LiDAR points.
+        2. Rejects points outside the configured range.
+        3. Uses a robust truncated edge distance.
+        4. Balances errors across image grid cells.
+        5. Penalizes loss of initially visible points.
+        6. Regularizes rotation corrections.
     """
 
     height, width = RGB_image.shape[:2]
-    points = np.asarray(Verticies[:, :3], dtype=np.float64)
+
+    points = np.asarray(
+        Verticies[:, :3],
+        dtype=np.float64
+    )
 
     # --------------------------------------------------
-    # 1. Extract RGB image edges and distance transform
+    # 1. Extract image edges
     # --------------------------------------------------
-    gray = cv2.cvtColor(RGB_image, cv2.COLOR_RGB2GRAY)
 
-    # Light smoothing reduces sensitivity to image noise.
-    gray = cv2.GaussianBlur(gray, (5, 5), 1.0)
+    gray = cv2.cvtColor(
+        RGB_image,
+        cv2.COLOR_RGB2GRAY
+    )
 
-    edges = cv2.Canny(gray, 50, 150)
+    gray = cv2.GaussianBlur(
+        gray,
+        (5, 5),
+        1.0
+    )
 
-    # Distance to nearest edge, in pixels.
-    # Edge pixels are zero-valued in the distance-transform input.
-    distance_map = distance_transform_edt(edges == 0)
+    edges = cv2.Canny(
+        gray,
+        50,
+        150
+    )
+
+    distance_map = distance_transform_edt(
+        edges == 0
+    ).astype(np.float32)
 
     # --------------------------------------------------
-    # 2. Select LiDAR points
+    # 2. Select valid LiDAR points
     # --------------------------------------------------
-    valid = np.all(np.isfinite(points), axis=1)
+
+    valid = np.all(
+        np.isfinite(points),
+        axis=1
+    )
 
     if lidar_edge_mask is not None:
-        valid &= np.asarray(lidar_edge_mask, dtype=bool)
+
+        lidar_edge_mask = np.asarray(
+            lidar_edge_mask,
+            dtype=bool
+        )
+
+        if len(lidar_edge_mask) != len(points):
+            raise ValueError(
+                "lidar_edge_mask must match the number of vertices."
+            )
+
+        valid &= lidar_edge_mask
 
     points = points[valid]
 
-    if len(points) < 20:
+    if len(points) < 100:
         raise ValueError(
-            "Too few valid LiDAR points for rotation refinement."
+            "Too few valid LiDAR points."
         )
 
-    # Deterministic subsampling for speed.
-    if len(points) > sample_size:
-        indices = np.linspace(
-            0, len(points) - 1, sample_size
-        ).astype(int)
-        points = points[indices]
+    # --------------------------------------------------
+    # 3. Transform to initial camera coordinates
+    # --------------------------------------------------
+
+    points_cam0 = (
+        rot_image.T @ (points - pos).T
+    ).T
+
+    depth0 = points_cam0[:, 2]
+
+    range0 = np.linalg.norm(
+        points_cam0,
+        axis=1
+    )
+
+    valid = (
+        (depth0 > 0.5)
+        & (range0 >= min_range)
+        & (range0 <= max_range)
+    )
+
+    points_cam0 = points_cam0[valid]
+
+    if len(points_cam0) < 100:
+        raise ValueError(
+            "Too few LiDAR points within the camera range."
+        )
 
     # --------------------------------------------------
-    # 3. Camera intrinsics
+    # 4. Project initial points
     # --------------------------------------------------
+
     fx = K_RGB[0, 0]
     fy = K_RGB[1, 1]
     cx = K_RGB[0, 2]
     cy = K_RGB[1, 2]
 
-    # Initial camera-frame coordinates.
-    points_cam0 = (
-        rot_image.T @ (points - pos).T
-    ).T
+    depth = points_cam0[:, 2]
+
+    u0 = fx * points_cam0[:, 0] / depth + cx
+    v0 = fy * points_cam0[:, 1] / depth + cy
+
+    initial_inside = (
+        (u0 >= 1)
+        & (u0 < width - 2)
+        & (v0 >= 1)
+        & (v0 < height - 2)
+    )
+
+    # Fixed initial field-of-view cohort.
+    # Points outside this region do not affect the objective.
+
+    points_cam0 = points_cam0[initial_inside]
+
+    if len(points_cam0) < 100:
+        raise ValueError(
+            "Too few LiDAR points initially inside the RGB image. "
+            "Check the camera rotation, image orientation and intrinsics."
+        )
 
     # --------------------------------------------------
-    # 4. Rotation-only projection objective
+    # 5. Deterministic subsampling
     # --------------------------------------------------
+
+    if len(points_cam0) > sample_size:
+
+        rng = np.random.default_rng(42)
+
+        indices = rng.choice(
+            len(points_cam0),
+            size=sample_size,
+            replace=False
+        )
+
+        points_cam0 = points_cam0[indices]
+
+    n_points = len(points_cam0)
+
+    print(
+        f"Rotation refinement using {n_points:,} LiDAR points"
+    )
+
+    # --------------------------------------------------
+    # 6. Rotation objective
+    # --------------------------------------------------
+
+    limit = np.deg2rad(max_rotation_deg)
+
     def objective(delta_rotvec):
+
         R_delta = Rotation.from_rotvec(
             delta_rotvec
         ).as_matrix()
 
-        # Apply a local correction in camera coordinates.
-        points_cam = (R_delta.T @ points_cam0.T).T
+        # Apply rotation correction in camera coordinates.
+        points_cam = (
+            R_delta.T @ points_cam0.T
+        ).T
 
         depth = points_cam[:, 2]
 
         front = (
-            (depth > 0.05)
-            & np.isfinite(depth)
+            np.isfinite(depth)
+            & (depth > 0.5)
         )
 
-        if np.count_nonzero(front) < 20:
+        if np.count_nonzero(front) < 100:
             return 1e6
 
         p = points_cam[front]
@@ -726,40 +817,112 @@ def refine_lidar_camera_rotation(
         v = fy * p[:, 1] / d + cy
 
         inside = (
-            (u >= 0)
-            & (u < width)
-            & (v >= 0)
-            & (v < height)
+            (u >= 1)
+            & (u < width - 2)
+            & (v >= 1)
+            & (v < height - 2)
         )
 
-        # Penalize rotations that project points outside the image.
-        coverage = np.mean(inside)
+        # Penalize loss of points that were initially
+        # inside the image.
 
-        if np.count_nonzero(inside) < 20:
-            return 1e5 + 1e4 * (1.0 - coverage)
+        coverage = np.count_nonzero(inside) / n_points
 
-        px = np.clip(
-            np.rint(u[inside]).astype(int), 0, width - 1
+        if np.count_nonzero(inside) < 100:
+            return 1e6
+
+        u = u[inside]
+        v = v[inside]
+
+        # --------------------------------------------------
+        # Bilinear interpolation of distance transform
+        # --------------------------------------------------
+
+        distances = map_coordinates(
+            distance_map,
+            [v, u],
+            order=1,
+            mode="nearest"
         )
-        py = np.clip(
-            np.rint(v[inside]).astype(int), 0, height - 1
+
+        # Robust truncated distance.
+        distances = np.minimum(
+            distances,
+            max_edge_distance
         )
 
-        distances = distance_map[py, px]
+        # --------------------------------------------------
+        # Spatial balancing
+        # --------------------------------------------------
 
-        # Robust penalty: large mismatches cannot dominate.
-        # The 10-pixel cap limits the influence of unrelated edges.
-        distances = np.minimum(distances, 10.0)
+        cell_x = np.clip(
+            (u / width * grid_x).astype(int),
+            0,
+            grid_x - 1
+        )
 
-        # Favor points close to image edges.
-        alignment_error = np.mean(distances)
+        cell_y = np.clip(
+            (v / height * grid_y).astype(int),
+            0,
+            grid_y - 1
+        )
 
-        return alignment_error + 10.0 * (1.0 - coverage)
+        cell_indices = (
+            cell_y * grid_x + cell_x
+        )
+
+        cell_errors = []
+
+        for cell in np.unique(cell_indices):
+
+            mask = cell_indices == cell
+
+            if np.count_nonzero(mask) < min_cell_points:
+                continue
+
+            cell_error = np.mean(
+                distances[mask]
+            )
+
+            cell_errors.append(cell_error)
+
+        if len(cell_errors) < min_valid_cells:
+            return 1e6
+
+        # Every sufficiently populated image cell
+        # receives equal weight.
+
+        alignment_error = np.mean(
+            cell_errors
+        )
+
+        # --------------------------------------------------
+        # Coverage penalty
+        # --------------------------------------------------
+
+        coverage_penalty = (
+            coverage_weight * (1.0 - coverage)
+        )
+
+        # --------------------------------------------------
+        # Rotation regularization
+        # --------------------------------------------------
+
+        rotation_penalty = (
+            regularization
+            * np.sum(delta_rotvec**2)
+            / (limit**2 + 1e-12)
+        )
+
+        return (
+            alignment_error
+            + coverage_penalty
+            + rotation_penalty
+        )
 
     # --------------------------------------------------
-    # 5. Optimize the rotation correction
+    # 7. Optimize
     # --------------------------------------------------
-    limit = np.deg2rad(max_rotation_deg)
 
     result = minimize(
         objective,
@@ -784,6 +947,41 @@ def refine_lidar_camera_rotation(
     ).as_matrix()
 
     R_refined = rot_image @ R_delta
+
+    # --------------------------------------------------
+    # 8. Diagnostics
+    # --------------------------------------------------
+
+    print("\n--- Rotation Refinement ---")
+
+    print("Success:", result.success)
+    print("Message:", result.message)
+
+    print(
+        "Initial objective:",
+        objective(np.zeros(3))
+    )
+
+    print(
+        "Final objective:",
+        result.fun
+    )
+
+    print(
+        "Rotation correction (degrees):",
+        np.round(np.rad2deg(delta_rotvec), 4)
+    )
+
+    print(
+        "Total correction magnitude (degrees):",
+        round(
+            np.rad2deg(np.linalg.norm(delta_rotvec)),
+            4
+        )
+    )
+
+    print("Iterations:", result.nit)
+    print("Function evaluations:", result.nfev)
 
     return R_refined, delta_rotvec, result
 
@@ -875,6 +1073,96 @@ def save_ply_rgb(vertices, intensity, path):
 
     print(f"Saved {len(vertices)} vertices with RGB color to {path}")
 
+# ---------------- Debug ------------------------
+
+
+def visualize_lidar_projection(
+    RGB_image,
+    Verticies,
+    rot_image,
+    pos,
+    K_RGB,
+    max_range=40.0,
+    sample_size=30000,
+):
+    """
+    Overlay projected LiDAR points onto an RGB image.
+    """
+
+    height, width = RGB_image.shape[:2]
+
+    points = Verticies[:, :3]
+
+    points_cam = (
+        rot_image.T @ (points - pos).T
+    ).T
+
+    depth = points_cam[:, 2]
+
+    ranges = np.linalg.norm(
+        points_cam,
+        axis=1
+    )
+
+    valid = (
+        (depth > 0.5)
+        & (ranges < max_range)
+        & np.isfinite(depth)
+    )
+
+    points_cam = points_cam[valid]
+    depth = depth[valid]
+
+    if len(points_cam) > sample_size:
+
+        rng = np.random.default_rng(42)
+
+        idx = rng.choice(
+            len(points_cam),
+            sample_size,
+            replace=False
+        )
+
+        points_cam = points_cam[idx]
+        depth = depth[idx]
+
+    u = (
+        K_RGB[0, 0] * points_cam[:, 0] / depth
+        + K_RGB[0, 2]
+    )
+
+    v = (
+        K_RGB[1, 1] * points_cam[:, 1] / depth
+        + K_RGB[1, 2]
+    )
+
+    inside = (
+        (u >= 0)
+        & (u < width)
+        & (v >= 0)
+        & (v < height)
+    )
+
+    u = np.rint(u[inside]).astype(int)
+    v = np.rint(v[inside]).astype(int)
+
+    # Create overlay
+    overlay = RGB_image.copy()
+
+    # Color points according to distance
+    colors = cv2.applyColorMap(
+        np.linspace(
+            0, 255, len(u), dtype=np.uint8
+        ).reshape(-1, 1),
+        cv2.COLORMAP_TURBO
+    )
+
+    # OpenCV uses BGR, convert colors to RGB
+    colors = colors[:, 0, ::-1]
+
+    overlay[v, u] = colors
+
+    return overlay
 
 
 # ---------------- Orchestration ----------------
@@ -941,7 +1229,7 @@ def main(args):
 
     image_files = sorted([
         filename for filename in os.listdir(args.img)
-        if filename.lower().endswith(".tiff")
+        if filename.lower().endswith("_ir_normalized.tiff")
     ])
 
     for filename in image_files[::args.skip]:
@@ -1004,6 +1292,13 @@ def main(args):
         rot_world = Rotation.from_quat(q_lidar.as_quat())
         rot_image = np.matmul(rot_world.as_matrix(),ROT_CAM.as_matrix())
 
+        # DEBUG/possible error theory
+        # I think at some point the images are being flipped? I have no idea why.
+        # This code flips the images over, remove if it turns out to be wrong.
+
+        RGB_image=np.rot90(RGB_image, k=2)
+        pixels=np.rot90(pixels, k=2)
+
         R_refined, delta_rotvec, result = (
             refine_lidar_camera_rotation(
                 RGB_image=RGB_image,
@@ -1012,8 +1307,22 @@ def main(args):
                 pos=pageposition,
                 K_RGB=K_RGB,
                 lidar_edge_mask=None,
-                max_rotation_deg=2.0,
+                max_rotation_deg=ROTATION_MAX_DEG,
                 max_iterations=150,
+                sample_size=ROTATION_SAMPLE_SIZE,
+                max_range=ROTATION_MAX_RANGE,
+                min_range=ROTATION_MIN_RANGE,
+
+                max_edge_distance=ROTATION_MAX_EDGE_DISTANCE,
+
+                grid_x=ROTATION_GRID_X,
+                grid_y=ROTATION_GRID_Y,
+
+                min_cell_points=ROTATION_MIN_CELL_POINTS,
+                min_valid_cells=ROTATION_MIN_VALID_CELLS,
+
+                coverage_weight=ROTATION_COVERAGE_WEIGHT,
+                regularization=ROTATION_REGULARIZATION,
             )
         )
 
@@ -1029,11 +1338,48 @@ def main(args):
 
 
         vertex_stack = apply_pixel_colors_to_vertices_vectorized(
-            pixels,
+            RGB_image,
             R_refined, pageposition,
-            K,
+            K_RGB,
             vertex_stack, 0.05
         )
+
+
+        # DEBUG: Display images
+        # It doesn't work so I just made it false, I'll fix it and add an arg later.
+        # Display images side by side
+        if False:
+            # Visualize initial projection
+            initial_projection = visualize_lidar_projection(
+                RGB_image,
+                vertex_stack,
+                rot_image,
+                pageposition,
+                K_RGB
+            )
+
+            # Visualize refined projection
+            refined_projection = visualize_lidar_projection(
+                RGB_image,
+                vertex_stack,
+                R_refined,
+                pageposition,
+                K_RGB
+            )
+            comparison = np.hstack([
+                initial_projection,
+                refined_projection
+            ])
+
+            cv2.imshow(
+                "LiDAR Alignment: Initial (Left) | Refined (Right)",
+                cv2.cvtColor(comparison, cv2.COLOR_RGB2BGR)
+            )
+
+            print("Press any key to continue...")
+
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
 
     print("Writing pointcloud...")
     save_ply_rgb(vertex_stack, intensity, args.out)
